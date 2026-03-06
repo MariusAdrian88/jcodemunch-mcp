@@ -295,8 +295,10 @@ Every tool response includes a `_meta` envelope with timing, token savings, and 
 | PHP        | `.php`        | function, class, method, type, constant |
 | Dart       | `.dart`       | function, class, method, type           |
 | C#         | `.cs`         | class, method, type, record             |
-| C          | `.c`, `.h`    | function, type, constant                |
-| C++        | `.cpp`, `.hpp`, `.cc`, `.hh`, `.cxx`, `.hxx` | function, class, method, type, constant |
+| C          | `.c`          | function, type, constant                |
+| C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `.h`* | function, class, method, type, constant |
+
+\* `.h` is parsed as C++ first, then falls back to C when no C++ symbols are extracted.
 
 See LANGUAGE_SUPPORT.md for full semantics.
 
@@ -374,6 +376,7 @@ For **LM Studio**, ensure the Local Server is running (usually on port 1234):
 | `OPENAI_MODEL`              | Model name for local LLMs (default: `qwen3-coder`) | No |
 | `OPENAI_TIMEOUT`            | Timeout in seconds for local requests (default: `60.0`) | No |
 | `CODE_INDEX_PATH`           | Custom cache path         | No       |
+| `JCODEMUNCH_MAX_INDEX_FILES`| Maximum files to index per repo/folder (default: `500`) | No |
 | `JCODEMUNCH_SHARE_SAVINGS`  | Set to `0` to disable anonymous community token savings reporting | No       |
 | `JCODEMUNCH_LOG_LEVEL`      | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`) | No       |
 | `JCODEMUNCH_LOG_FILE`       | Path to log file. If unset, logs go to stderr. Use a file to avoid polluting MCP stdio. | No       |
