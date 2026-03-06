@@ -8,10 +8,12 @@ from urllib.parse import urlparse
 
 import httpx
 
+from collections import defaultdict
+
 from ..parser import parse_file, LANGUAGE_EXTENSIONS
 from ..security import is_secret_file, is_binary_extension, get_max_index_files
 from ..storage import IndexStore
-from ..summarizer import summarize_symbols
+from ..summarizer import summarize_symbols, generate_file_summaries
 
 
 # File patterns to skip
@@ -314,11 +316,18 @@ async def index_repo(
 
             new_symbols = summarize_symbols(new_symbols, use_ai=use_ai_summaries)
 
+            # Generate file summaries for changed/new files
+            incr_symbols_map = defaultdict(list)
+            for s in new_symbols:
+                incr_symbols_map[s.file].append(s)
+            incr_file_summaries = generate_file_summaries(dict(incr_symbols_map))
+
             updated = store.incremental_save(
                 owner=owner, name=repo,
                 changed_files=changed, new_files=new, deleted_files=deleted,
                 new_symbols=new_symbols, raw_files=raw_files_subset,
                 languages={},
+                file_summaries=incr_file_summaries,
             )
 
             result = {
@@ -362,6 +371,13 @@ async def index_repo(
         # Generate summaries
         all_symbols = summarize_symbols(all_symbols, use_ai=use_ai_summaries)
 
+        # Generate file-level summaries (single-pass grouping)
+        file_symbols_map = defaultdict(list)
+        for s in all_symbols:
+            file_symbols_map[s.file].append(s)
+        file_summaries = generate_file_summaries(dict(file_symbols_map))
+
+
         # Save index
         # Track hashes for all discovered source files so incremental change detection
         # does not repeatedly report no-symbol files as "new".
@@ -377,6 +393,7 @@ async def index_repo(
             raw_files=raw_files,
             languages=languages,
             file_hashes=file_hashes,
+            file_summaries=file_summaries,
         )
 
         result = {
@@ -385,6 +402,7 @@ async def index_repo(
             "indexed_at": store.load_index(owner, repo).indexed_at,
             "file_count": len(parsed_files),
             "symbol_count": len(all_symbols),
+            "file_summary_count": sum(1 for v in file_summaries.values() if v),
             "languages": languages,
             "files": parsed_files[:20],  # Limit files in response
         }

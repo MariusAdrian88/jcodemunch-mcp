@@ -114,7 +114,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "include_summaries": {
                         "type": "boolean",
-                        "description": "Include per-file summaries in the tree output",
+                        "description": "Include file-level summaries in the tree nodes",
                         "default": False
                     }
                 },

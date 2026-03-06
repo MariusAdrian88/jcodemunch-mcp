@@ -9,6 +9,7 @@ from .batch_summarize import (
     summarize_symbols_simple,
     summarize_symbols,
 )
+from .file_summarize import generate_file_summaries
 
 __all__ = [
     "BatchSummarizer",
@@ -18,4 +19,5 @@ __all__ = [
     "signature_fallback",
     "summarize_symbols_simple",
     "summarize_symbols",
+    "generate_file_summaries",
 ]

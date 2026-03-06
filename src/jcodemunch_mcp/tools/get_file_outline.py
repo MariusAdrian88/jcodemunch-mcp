@@ -73,10 +73,18 @@ def get_file_outline(
     tokens_saved = estimate_savings(raw_bytes, response_bytes)
     total_saved = record_savings(tokens_saved)
 
+    # File-level summary
+    file_summary = ""
+    if hasattr(index, "file_summaries") and index.file_summaries:
+        file_summary = index.file_summaries.get(file_path, "")
+    elif isinstance(getattr(index, "file_summaries", None), dict):
+        file_summary = index.file_summaries.get(file_path, "")
+
     return {
         "repo": f"{owner}/{name}",
         "file": file_path,
         "language": language,
+        "file_summary": file_summary,
         "symbols": symbols_output,
         "_meta": {
             "timing_ms": round(elapsed, 1),

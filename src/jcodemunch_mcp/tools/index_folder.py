@@ -8,9 +8,12 @@ from typing import Optional
 
 import pathspec
 
+from collections import defaultdict
+
 logger = logging.getLogger(__name__)
 
 from ..parser import parse_file, LANGUAGE_EXTENSIONS
+from ..summarizer import generate_file_summaries
 from ..security import (
     validate_path,
     is_symlink_escape,
@@ -338,6 +341,12 @@ def index_folder(
 
             new_symbols = summarize_symbols(new_symbols, use_ai=use_ai_summaries)
 
+            # Generate file summaries for changed/new files
+            incr_symbols_map = defaultdict(list)
+            for s in new_symbols:
+                incr_symbols_map[s.file].append(s)
+            incr_file_summaries = generate_file_summaries(dict(incr_symbols_map))
+
             from ..storage.index_store import _get_git_head
             git_head = _get_git_head(folder_path) or ""
 
@@ -346,6 +355,7 @@ def index_folder(
                 changed_files=changed, new_files=new, deleted_files=deleted,
                 new_symbols=new_symbols, raw_files=raw_files_subset,
                 languages={}, git_head=git_head,
+                file_summaries=incr_file_summaries,
             )
 
             result = {
@@ -404,6 +414,13 @@ def index_folder(
         # Generate summaries
         all_symbols = summarize_symbols(all_symbols, use_ai=use_ai_summaries)
 
+        # Generate file-level summaries (single-pass grouping)
+        file_symbols_map = defaultdict(list)
+        for s in all_symbols:
+            file_symbols_map[s.file].append(s)
+        file_summaries = generate_file_summaries(dict(file_symbols_map))
+
+
         # Save index
         # Track hashes for all discovered source files so incremental change detection
         # does not repeatedly report no-symbol files as "new".
@@ -419,6 +436,7 @@ def index_folder(
             raw_files=raw_files,
             languages=languages,
             file_hashes=file_hashes,
+            file_summaries=file_summaries,
         )
 
         result = {
@@ -428,6 +446,7 @@ def index_folder(
             "indexed_at": store.load_index(owner, repo_name).indexed_at,
             "file_count": len(parsed_files),
             "symbol_count": len(all_symbols),
+            "file_summary_count": sum(1 for v in file_summaries.values() if v),
             "languages": languages,
             "files": parsed_files[:20],  # Limit files in response
             "discovery_skip_counts": skip_counts,
