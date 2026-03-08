@@ -191,6 +191,45 @@ class TestVersionMismatchWarning:
         assert any("newer version" in w for w in warnings)
 
 
+class TestNestedGitignore:
+    def test_nested_gitignore_excludes_subdirectory_files(self, tmp_path):
+        """Nested .gitignore files should exclude files relative to their own directory."""
+        from jcodemunch_mcp.tools.index_folder import discover_local_files
+
+        # Root structure: cap/ and core/ each with their own .gitignore + deps/
+        for subdir in ("cap", "core"):
+            sub = tmp_path / subdir
+            (sub / "deps").mkdir(parents=True)
+            (sub / "deps" / "some_dep.ex").write_text("defmodule Dep do end\n")
+            (sub / "app.ex").write_text("defmodule App do end\n")
+            (sub / ".gitignore").write_text("/deps/\n/_build/\n")
+
+        files, _, skip_counts = discover_local_files(tmp_path)
+        paths = [f.as_posix() for f in files]
+
+        # app.ex files should be indexed
+        assert any("cap/app.ex" in p for p in paths)
+        assert any("core/app.ex" in p for p in paths)
+
+        # deps/ files should be excluded by nested .gitignore
+        assert not any("deps" in p for p in paths)
+        assert skip_counts["gitignore"] >= 2
+
+    def test_root_gitignore_still_works(self, tmp_path):
+        """Root .gitignore should still be respected."""
+        from jcodemunch_mcp.tools.index_folder import discover_local_files
+
+        (tmp_path / ".gitignore").write_text("*.pyc\n__pycache__/\n")
+        (tmp_path / "main.py").write_text("def main(): pass\n")
+        (tmp_path / "main.pyc").write_bytes(b"\x00compiled")
+
+        files, _, skip_counts = discover_local_files(tmp_path)
+        paths = [f.as_posix() for f in files]
+
+        assert any("main.py" in p for p in paths)
+        assert not any(".pyc" in p for p in paths)
+
+
 class TestFolderFileLimitEnvVar:
     def test_folder_specific_env_var_respected(self, tmp_path):
         """JCODEMUNCH_MAX_FOLDER_FILES should cap index_folder file discovery."""

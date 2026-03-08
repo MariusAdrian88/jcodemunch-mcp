@@ -55,6 +55,38 @@ def _load_gitignore(folder_path: Path) -> Optional[pathspec.PathSpec]:
     return None
 
 
+def _load_all_gitignores(root: Path) -> dict[Path, pathspec.PathSpec]:
+    """Load all .gitignore files in the tree, keyed by their directory.
+
+    Supports monorepos and poncho-style projects where subdirectories each
+    have their own .gitignore (e.g. cap/.gitignore, core/.gitignore).
+    """
+    specs: dict[Path, pathspec.PathSpec] = {}
+    for gitignore_path in root.rglob(".gitignore"):
+        try:
+            content = gitignore_path.read_text(encoding="utf-8", errors="replace")
+            spec = pathspec.PathSpec.from_lines("gitignore", content.splitlines())
+            specs[gitignore_path.parent.resolve()] = spec
+        except Exception:
+            pass
+    return specs
+
+
+def _is_gitignored(file_path: Path, gitignore_specs: dict[Path, pathspec.PathSpec]) -> bool:
+    """Check if a file is excluded by any .gitignore in its ancestor chain.
+
+    Each spec is applied relative to its own directory, matching standard git behaviour.
+    """
+    for gitignore_dir, spec in gitignore_specs.items():
+        try:
+            rel = file_path.relative_to(gitignore_dir)
+            if spec.match_file(rel.as_posix()):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def _local_repo_name(folder_path: Path) -> str:
     """Stable local repo id derived from basename + resolved path hash."""
     digest = hashlib.sha1(str(folder_path).encode("utf-8")).hexdigest()[:8]
@@ -133,8 +165,8 @@ def discover_local_files(
         "file_limit": 0,
     }
 
-    # Load .gitignore
-    gitignore_spec = _load_gitignore(root)
+    # Load all .gitignore files in the tree (root + all subdirectories)
+    gitignore_specs = _load_all_gitignores(root)
 
     # Build extra ignore spec if provided
     extra_spec = None
@@ -179,8 +211,8 @@ def discover_local_files(
             logger.debug("SKIP skip_pattern: %s", rel_path)
             continue
 
-        # .gitignore matching
-        if gitignore_spec and gitignore_spec.match_file(rel_path):
+        # .gitignore matching (root + all nested .gitignore files)
+        if gitignore_specs and _is_gitignored(file_path.resolve(), gitignore_specs):
             skip_counts["gitignore"] += 1
             logger.debug("SKIP gitignore: %s", rel_path)
             continue

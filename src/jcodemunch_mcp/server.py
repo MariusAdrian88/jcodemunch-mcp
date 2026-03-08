@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -248,7 +249,7 @@ async def list_tools() -> list[Tool]:
                     "language": {
                         "type": "string",
                         "description": "Optional filter by language",
-                        "enum": ["python", "javascript", "typescript", "tsx", "go", "rust", "java", "php", "dart", "csharp", "c", "cpp", "swift", "elixir", "ruby", "perl", "gdscript", "blade"]
+                        "enum": ["python", "javascript", "typescript", "tsx", "go", "rust", "java", "php", "dart", "csharp", "c", "cpp", "swift", "elixir", "ruby", "perl", "gdscript", "blade", "kotlin", "scala", "haskell", "julia", "r", "lua", "bash", "css", "sql", "toml", "erlang", "fortran"]
                     },
                     "max_results": {
                         "type": "integer",
@@ -336,7 +337,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 incremental=arguments.get("incremental", True),
             )
         elif name == "index_folder":
-            import functools
             _ai = arguments.get("use_ai_summaries", _default_use_ai_summaries())
             result = await asyncio.to_thread(
                 functools.partial(
