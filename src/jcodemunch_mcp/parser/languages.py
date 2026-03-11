@@ -100,6 +100,35 @@ LANGUAGE_EXTENSIONS = {
     ".for": "fortran",
     ".fpp": "fortran",
     ".sql": "sql",
+    # Scala
+    ".scala": "scala",
+    ".sc": "scala",
+    # Haskell
+    ".hs": "haskell",
+    ".lhs": "haskell",
+    # Julia
+    ".jl": "julia",
+    # R
+    ".r": "r",
+    # CSS
+    ".css": "css",
+    # TOML
+    ".toml": "toml",
+    # Groovy
+    ".groovy": "groovy",
+    ".gradle": "groovy",
+    # Objective-C
+    ".m": "objc",
+    ".mm": "objc",
+    # Protobuf
+    ".proto": "proto",
+    # HCL / Terraform
+    ".tf": "hcl",
+    ".hcl": "hcl",
+    ".tfvars": "hcl",
+    # GraphQL
+    ".graphql": "graphql",
+    ".gql": "graphql",
 }
 
 
@@ -899,6 +928,216 @@ SQL_SPEC = LanguageSpec(
 )
 
 
+# Scala specification
+SCALA_SPEC = LanguageSpec(
+    ts_language="scala",
+    symbol_node_types={
+        "class_definition": "class",
+        "object_definition": "class",
+        "trait_definition": "type",
+        "enum_definition": "type",
+        "function_definition": "function",
+    },
+    name_fields={
+        "class_definition": "name",
+        "object_definition": "name",
+        "trait_definition": "name",
+        "enum_definition": "name",
+        "function_definition": "name",
+    },
+    param_fields={
+        "function_definition": "parameters",
+    },
+    return_type_fields={
+        "function_definition": "return_type",
+    },
+    docstring_strategy="preceding_comment",
+    decorator_node_type="annotation",
+    container_node_types=["class_definition", "object_definition", "trait_definition"],
+    constant_patterns=["val_definition", "var_definition"],
+    type_patterns=["trait_definition", "enum_definition"],
+)
+
+
+# Haskell specification
+# NOTE: Haskell's tree-sitter grammar represents declarations as complex nested
+# nodes without standard named fields. Full extraction is deferred to a future
+# custom parser. Files are indexed for text search; symbol extraction is minimal.
+HASKELL_SPEC = LanguageSpec(
+    ts_language="haskell",
+    symbol_node_types={
+        "function": "function",
+        "data_type": "type",
+        "type_synon": "type",
+        "newtype": "type",
+        "class": "type",
+    },
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=["data_type", "type_synon", "newtype"],
+)
+
+
+# Julia specification
+# NOTE: Julia's tree-sitter grammar nests function names inside signature nodes
+# rather than exposing them as direct named fields. Custom extraction is handled
+# by _parse_julia_symbols() in extractor.py. Fields below are intentionally empty.
+JULIA_SPEC = LanguageSpec(
+    ts_language="julia",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# R specification
+# NOTE: R functions are values assigned to names (e.g. foo <- function(x) {...}).
+# The generic extractor cannot handle this pattern. Files are indexed for text
+# search; a custom extractor will be added in a future pass.
+R_SPEC = LanguageSpec(
+    ts_language="r",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# CSS specification
+# NOTE: CSS rule sets use selectors as names. Symbol extraction is deferred to
+# a future custom parser. Files are indexed for text search.
+CSS_SPEC = LanguageSpec(
+    ts_language="css",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# TOML specification
+# NOTE: TOML tables are the closest analogue to symbols. Custom extraction
+# deferred. Files are indexed for text search.
+TOML_SPEC = LanguageSpec(
+    ts_language="toml",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# Groovy specification
+# NOTE: tree-sitter-groovy uses a low-level grammar (command/unit/block/func nodes)
+# rather than Java-style named declarations. Custom extraction is in extractor.py.
+GROOVY_SPEC = LanguageSpec(
+    ts_language="groovy",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# Objective-C specification
+# NOTE: ObjC class interface/implementation and method declarations use
+# non-standard selector-based naming. Custom extraction is in extractor.py.
+OBJC_SPEC = LanguageSpec(
+    ts_language="objc",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# Protocol Buffers specification
+# NOTE: Custom extraction in extractor.py handles message/service/rpc/enum
+# name resolution from child nodes.
+PROTO_SPEC = LanguageSpec(
+    ts_language="proto",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# HCL / Terraform specification
+# NOTE: HCL blocks (resource, data, module, variable, output, locals) are
+# extracted as symbols by _parse_hcl_symbols() in extractor.py.
+HCL_SPEC = LanguageSpec(
+    ts_language="hcl",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# GraphQL specification
+# NOTE: GraphQL type/query/mutation/fragment definitions are extracted by
+# _parse_graphql_symbols() in extractor.py.
+GRAPHQL_SPEC = LanguageSpec(
+    ts_language="graphql",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
 # Language registry
 LANGUAGE_REGISTRY = {
     "python": PYTHON_SPEC,
@@ -930,6 +1169,17 @@ LANGUAGE_REGISTRY = {
     "erlang": ERLANG_SPEC,
     "fortran": FORTRAN_SPEC,
     "sql": SQL_SPEC,
+    "scala": SCALA_SPEC,
+    "haskell": HASKELL_SPEC,
+    "julia": JULIA_SPEC,
+    "r": R_SPEC,
+    "css": CSS_SPEC,
+    "toml": TOML_SPEC,
+    "groovy": GROOVY_SPEC,
+    "objc": OBJC_SPEC,
+    "proto": PROTO_SPEC,
+    "hcl": HCL_SPEC,
+    "graphql": GRAPHQL_SPEC,
 }
 
 logger = logging.getLogger(__name__)

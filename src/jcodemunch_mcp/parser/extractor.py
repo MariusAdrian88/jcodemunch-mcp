@@ -46,6 +46,18 @@ def parse_file(content: str, filename: str, language: str) -> list[Symbol]:
         symbols = _parse_fortran_symbols(source_bytes, filename)
     elif language == "sql":
         symbols = _parse_sql_symbols(source_bytes, filename)
+    elif language == "objc":
+        symbols = _parse_objc_symbols(source_bytes, filename)
+    elif language == "proto":
+        symbols = _parse_proto_symbols(source_bytes, filename)
+    elif language == "hcl":
+        symbols = _parse_hcl_symbols(source_bytes, filename)
+    elif language == "graphql":
+        symbols = _parse_graphql_symbols(source_bytes, filename)
+    elif language == "julia":
+        symbols = _parse_julia_symbols(source_bytes, filename)
+    elif language == "groovy":
+        symbols = _parse_groovy_symbols(source_bytes, filename)
     else:
         spec = LANGUAGE_REGISTRY[language]
         symbols = _parse_with_spec(source_bytes, filename, language, spec)
@@ -3400,3 +3412,590 @@ def _parse_sql_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
     all_symbols = dbt_symbols + symbols
     all_symbols.sort(key=lambda s: s.line)
     return all_symbols
+
+
+def _parse_objc_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse Objective-C source and extract class interfaces, implementations, and methods."""
+    try:
+        parser = get_parser("objc")
+    except Exception:
+        return []
+
+    tree = parser.parse(source_bytes)
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    CLASS_NODE_TYPES = {
+        "class_interface": "class",
+        "class_implementation": "class",
+        "category_interface": "class",
+        "category_implementation": "class",
+        "protocol_declaration": "type",
+    }
+
+    def _get_class_name(node) -> Optional[str]:
+        """First identifier child is the class name in ObjC @interface/@implementation."""
+        for child in node.children:
+            if child.type == "identifier":
+                return source[child.start_byte:child.end_byte]
+        return None
+
+    def _get_selector(node) -> Optional[str]:
+        """Build an ObjC method selector from identifier and method_parameter children.
+
+        Simple method  - (void)bar          -> "bar"
+        Multi-keyword  - (void)foo:(id)x    -> "foo:"
+        Multi-keyword  - (void)foo:(id)x bar:(id)y -> "foo:bar:"
+        """
+        identifiers: list[str] = []
+        has_params = False
+        for child in node.children:
+            if child.type == "identifier":
+                identifiers.append(source[child.start_byte:child.end_byte])
+            elif child.type == "method_parameter":
+                has_params = True
+        if not identifiers:
+            return None
+        if has_params:
+            return ":".join(identifiers) + ":"
+        return identifiers[0]
+
+    current_class: list[Optional[str]] = [None]
+
+    def _walk(node) -> None:
+        if node.type in CLASS_NODE_TYPES:
+            name = _get_class_name(node)
+            if name:
+                prev_class = current_class[0]
+                current_class[0] = name
+                sym = Symbol(
+                    id=make_symbol_id(filename, name, CLASS_NODE_TYPES[node.type]),
+                    file=filename,
+                    name=name,
+                    qualified_name=name,
+                    kind=CLASS_NODE_TYPES[node.type],
+                    language="objc",
+                    signature=f"@{node.type.replace('_', ' ')} {name}",
+                    docstring="",
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    byte_offset=node.start_byte,
+                    byte_length=node.end_byte - node.start_byte,
+                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                )
+                symbols.append(sym)
+                for child in node.children:
+                    _walk(child)
+                current_class[0] = prev_class
+                return
+        elif node.type in ("method_declaration", "method_definition") and current_class[0]:
+            selector = _get_selector(node)
+            if selector:
+                qualified = f"{current_class[0]}.{selector}"
+                raw_sig = source[node.start_byte:node.start_byte + min(120, node.end_byte - node.start_byte)]
+                sym = Symbol(
+                    id=make_symbol_id(filename, qualified, "method"),
+                    file=filename,
+                    name=selector,
+                    qualified_name=qualified,
+                    kind="method",
+                    language="objc",
+                    signature=raw_sig.split("{")[0].strip(),
+                    docstring="",
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    byte_offset=node.start_byte,
+                    byte_length=node.end_byte - node.start_byte,
+                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                )
+                symbols.append(sym)
+                return
+        elif node.type == "function_definition":
+            name = None
+            for child in node.children:
+                if child.type == "function_declarator":
+                    for sub in child.children:
+                        if sub.type == "identifier":
+                            name = source[sub.start_byte:sub.end_byte]
+                            break
+            if name:
+                raw_sig = source[node.start_byte:node.start_byte + min(120, node.end_byte - node.start_byte)]
+                sym = Symbol(
+                    id=make_symbol_id(filename, name, "function"),
+                    file=filename,
+                    name=name,
+                    qualified_name=name,
+                    kind="function",
+                    language="objc",
+                    signature=raw_sig.split("{")[0].strip(),
+                    docstring="",
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    byte_offset=node.start_byte,
+                    byte_length=node.end_byte - node.start_byte,
+                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                )
+                symbols.append(sym)
+        for child in node.children:
+            _walk(child)
+
+    _walk(tree.root_node)
+    return symbols
+
+
+def _parse_proto_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse Protocol Buffer source and extract messages, services, RPCs, and enums."""
+    try:
+        parser = get_parser("proto")
+    except Exception:
+        return []
+
+    tree = parser.parse(source_bytes)
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    NODE_MAP = {
+        "message": ("class", "message_name"),
+        "enum": ("type", "enum_name"),
+        "service": ("class", "service_name"),
+        "rpc": ("method", "rpc_name"),
+        "extend": ("class", "message_name"),
+    }
+
+    def _get_name(node, name_child_type: str) -> Optional[str]:
+        """Find the name child node and return its text.
+
+        Name nodes (e.g. message_name) contain a single identifier child.
+        Return the full text of the name node which equals the identifier text.
+        """
+        for child in node.children:
+            if child.type == name_child_type:
+                return source[child.start_byte:child.end_byte].strip()
+        return None
+
+    def _walk(node, scope: str = "") -> None:
+        if node.type in NODE_MAP:
+            kind, name_child_type = NODE_MAP[node.type]
+            name = _get_name(node, name_child_type)
+            if name:
+                qualified = f"{scope}.{name}" if scope else name
+                sym = Symbol(
+                    id=make_symbol_id(filename, qualified, kind),
+                    file=filename,
+                    name=name,
+                    qualified_name=qualified,
+                    kind=kind,
+                    language="proto",
+                    signature=f"{node.type} {name}",
+                    docstring="",
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    byte_offset=node.start_byte,
+                    byte_length=node.end_byte - node.start_byte,
+                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                )
+                symbols.append(sym)
+                new_scope = qualified if node.type in ("message", "service") else scope
+                for child in node.children:
+                    _walk(child, new_scope)
+                return
+        for child in node.children:
+            _walk(child, scope)
+
+    _walk(tree.root_node)
+    return symbols
+
+
+def _parse_hcl_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse HCL/Terraform source and extract named blocks as symbols.
+
+    resource "aws_instance" "web"  -> name="aws_instance.web", kind=class
+    variable "name"                -> name="name",             kind=constant
+    module "vpc"                   -> name="vpc",              kind=class
+    output "ip"                    -> name="ip",               kind=constant
+    provider "aws"                 -> name="aws",              kind=type
+    """
+    try:
+        parser = get_parser("hcl")
+    except Exception:
+        return []
+
+    tree = parser.parse(source_bytes)
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    BLOCK_KINDS = {
+        "resource": "class",
+        "data": "class",
+        "module": "class",
+        "variable": "constant",
+        "output": "constant",
+        "locals": "constant",
+        "provider": "type",
+        "terraform": "type",
+    }
+
+    def _string_lit_text(node) -> str:
+        """Extract the string value from a string_lit node.
+
+        HCL string_lit children: quoted_template_start + template_literal + quoted_template_end
+        """
+        for child in node.children:
+            if child.type == "template_literal":
+                return source[child.start_byte:child.end_byte].strip()
+        # fallback: strip surrounding quotes from raw text
+        return source[node.start_byte:node.end_byte].strip().strip('"')
+
+    def _walk(node) -> None:
+        if node.type == "block":
+            block_type: Optional[str] = None
+            labels: list[str] = []
+            for child in node.children:
+                if child.type == "identifier" and block_type is None:
+                    block_type = source[child.start_byte:child.end_byte].strip()
+                elif child.type == "string_lit" and block_type is not None:
+                    label = _string_lit_text(child)
+                    if label:
+                        labels.append(label)
+                elif child.type in ("block_start", "body"):
+                    break
+
+            if block_type and block_type in BLOCK_KINDS:
+                kind = BLOCK_KINDS[block_type]
+                if block_type in ("resource", "data") and len(labels) >= 2:
+                    name = f"{labels[0]}.{labels[1]}"
+                    signature = f'{block_type} "{labels[0]}" "{labels[1]}"'
+                elif labels:
+                    name = labels[0]
+                    signature = f'{block_type} "{labels[0]}"'
+                else:
+                    name = block_type
+                    signature = block_type
+
+                sym = Symbol(
+                    id=make_symbol_id(filename, name, kind),
+                    file=filename,
+                    name=name,
+                    qualified_name=name,
+                    kind=kind,
+                    language="hcl",
+                    signature=signature,
+                    docstring="",
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    byte_offset=node.start_byte,
+                    byte_length=node.end_byte - node.start_byte,
+                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                )
+                symbols.append(sym)
+
+        for child in node.children:
+            _walk(child)
+
+    _walk(tree.root_node)
+    return symbols
+
+
+def _parse_graphql_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse GraphQL schema/query files and extract type, operation, and fragment definitions."""
+    try:
+        parser = get_parser("graphql")
+    except Exception:
+        return []
+
+    tree = parser.parse(source_bytes)
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    NODE_KINDS = {
+        "object_type_definition": "type",
+        "interface_type_definition": "type",
+        "union_type_definition": "type",
+        "enum_type_definition": "type",
+        "input_object_type_definition": "type",
+        "scalar_type_definition": "type",
+        "schema_definition": "type",
+        "object_type_extension": "type",
+        "interface_type_extension": "type",
+        "enum_type_extension": "type",
+        "input_object_type_extension": "type",
+        "operation_definition": "function",
+        "fragment_definition": "function",
+    }
+
+    def _get_name(node) -> Optional[str]:
+        for child in node.children:
+            if child.type == "name":
+                return source[child.start_byte:child.end_byte].strip()
+            if child.type == "fragment_name":
+                return source[child.start_byte:child.end_byte].strip() or None
+        return None
+
+    def _walk(node) -> None:
+        if node.type in NODE_KINDS:
+            kind = NODE_KINDS[node.type]
+            name = _get_name(node)
+            if not name and node.type == "operation_definition":
+                for child in node.children:
+                    if child.type == "operation_type":
+                        name = source[child.start_byte:child.end_byte].strip()
+                        break
+                name = name or "anonymous"
+            if not name and node.type == "schema_definition":
+                name = "schema"
+            if name:
+                short = node.type.replace("_definition", "").replace("_extension", "").replace("_type", "")
+                sym = Symbol(
+                    id=make_symbol_id(filename, name, kind),
+                    file=filename,
+                    name=name,
+                    qualified_name=name,
+                    kind=kind,
+                    language="graphql",
+                    signature=f"{short} {name}",
+                    docstring="",
+                    line=node.start_point[0] + 1,
+                    end_line=node.end_point[0] + 1,
+                    byte_offset=node.start_byte,
+                    byte_length=node.end_byte - node.start_byte,
+                    content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                )
+                symbols.append(sym)
+            return  # don't recurse into definitions
+
+        for child in node.children:
+            _walk(child)
+
+    _walk(tree.root_node)
+    return symbols
+
+
+def _parse_julia_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse Julia source and extract functions, macros, structs, and modules.
+
+    Julia's tree-sitter grammar nests function names inside a signature node:
+      function_definition > signature > call_expression > identifier("name")
+    Struct names live in a type_head node:
+      struct_definition > type_head > identifier("Name")
+    Module names are direct identifier children.
+    """
+    try:
+        parser = get_parser("julia")
+    except Exception:
+        return []
+
+    tree = parser.parse(source_bytes)
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    def _func_name(node) -> Optional[str]:
+        """Extract name from function_definition via signature > call_expression > identifier."""
+        for child in node.children:
+            if child.type == "signature":
+                for sub in child.children:
+                    if sub.type == "call_expression":
+                        for inner in sub.children:
+                            if inner.type == "identifier":
+                                return source[inner.start_byte:inner.end_byte]
+                    elif sub.type == "identifier":
+                        return source[sub.start_byte:sub.end_byte]
+        return None
+
+    def _struct_name(node) -> Optional[str]:
+        """Extract name from struct_definition via type_head > identifier."""
+        for child in node.children:
+            if child.type == "type_head":
+                for sub in child.children:
+                    if sub.type == "identifier":
+                        return source[sub.start_byte:sub.end_byte]
+            elif child.type == "identifier":
+                return source[child.start_byte:child.end_byte]
+        return None
+
+    def _direct_name(node) -> Optional[str]:
+        """Return first identifier child text."""
+        for child in node.children:
+            if child.type == "identifier":
+                return source[child.start_byte:child.end_byte]
+        return None
+
+    def _walk(node, scope: str = "") -> None:
+        name: Optional[str] = None
+        kind: Optional[str] = None
+
+        if node.type in ("function_definition", "short_function_definition"):
+            name = _func_name(node)
+            kind = "function"
+        elif node.type == "macro_definition":
+            name = _direct_name(node)
+            kind = "function"
+        elif node.type in ("struct_definition", "mutable_struct_definition"):
+            name = _struct_name(node)
+            kind = "type"
+        elif node.type == "abstract_definition":
+            name = _struct_name(node) or _direct_name(node)
+            kind = "type"
+        elif node.type == "module_definition":
+            name = _direct_name(node)
+            kind = "class"
+
+        if name and kind:
+            qualified = f"{scope}.{name}" if scope else name
+            sym = Symbol(
+                id=make_symbol_id(filename, qualified, kind),
+                file=filename,
+                name=name,
+                qualified_name=qualified,
+                kind=kind,
+                language="julia",
+                signature=source[node.start_byte:node.start_byte + min(120, node.end_byte - node.start_byte)].split("\n")[0].strip(),
+                docstring="",
+                line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                byte_offset=node.start_byte,
+                byte_length=node.end_byte - node.start_byte,
+                content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+            )
+            symbols.append(sym)
+            new_scope = qualified if node.type == "module_definition" else scope
+            for child in node.children:
+                _walk(child, new_scope)
+            return
+
+        for child in node.children:
+            _walk(child, scope)
+
+    _walk(tree.root_node)
+    return symbols
+
+
+def _parse_groovy_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Parse Groovy source and extract classes, interfaces, and methods.
+
+    tree-sitter-groovy uses a low-level grammar: all constructs are 'command'
+    nodes containing 'unit' (keyword/type/name) and 'block' children.
+
+    Class:     command > unit[identifier("class")] + block[unit[identifier(Name)]]
+    Interface: command > unit[identifier("interface")] + block[unit[identifier(Name)]]
+    Method:    command > unit[identifier(type)] + block[unit[func[identifier(name), arg_block]]]
+    Def func:  command > unit[identifier("def")] + block[unit[func[identifier(name), arg_block]]]
+    """
+    try:
+        parser = get_parser("groovy")
+    except Exception:
+        return []
+
+    tree = parser.parse(source_bytes)
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    CONTAINER_KEYWORDS = {"class", "interface", "enum", "trait", "record"}
+
+    def _id_text(node) -> Optional[str]:
+        """Return text if node is an identifier, else None."""
+        if node.type == "identifier":
+            return source[node.start_byte:node.end_byte]
+        return None
+
+    def _first_id_in_unit(unit_node) -> Optional[str]:
+        """Get first identifier text inside a 'unit' node."""
+        for child in unit_node.children:
+            t = _id_text(child)
+            if t:
+                return t
+        return None
+
+    def _func_name_in_unit(unit_node) -> Optional[str]:
+        """Find a func > identifier name inside a unit node."""
+        for child in unit_node.children:
+            if child.type == "func":
+                for sub in child.children:
+                    t = _id_text(sub)
+                    if t:
+                        return t
+        return None
+
+    def _walk_commands(nodes, scope: str = "") -> None:
+        """Walk a list of sibling nodes looking for command patterns."""
+        for node in nodes:
+            if node.type != "command":
+                continue
+
+            units = [c for c in node.children if c.type == "unit"]
+            block = next((c for c in node.children if c.type == "block"), None)
+
+            if not units:
+                continue
+
+            first_kw = _first_id_in_unit(units[0])
+
+            # Class / interface / enum / trait declaration
+            if first_kw in CONTAINER_KEYWORDS and block:
+                # Name is in second unit, or first unit of block
+                class_name: Optional[str] = None
+                if len(units) >= 2:
+                    class_name = _first_id_in_unit(units[1])
+                if not class_name:
+                    block_units = [c for c in block.children if c.type == "unit"]
+                    if block_units:
+                        class_name = _first_id_in_unit(block_units[0])
+
+                if class_name:
+                    qualified = f"{scope}.{class_name}" if scope else class_name
+                    kind = "type" if first_kw in ("interface", "enum", "trait") else "class"
+                    sym = Symbol(
+                        id=make_symbol_id(filename, qualified, kind),
+                        file=filename,
+                        name=class_name,
+                        qualified_name=qualified,
+                        kind=kind,
+                        language="groovy",
+                        signature=f"{first_kw} {class_name}",
+                        docstring="",
+                        line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        byte_offset=node.start_byte,
+                        byte_length=node.end_byte - node.start_byte,
+                        content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                    )
+                    symbols.append(sym)
+                    # Recurse into class body
+                    _walk_commands(block.children, scope=qualified)
+                continue
+
+            # Method / function: has a unit containing a func node.
+            # Two patterns:
+            #   Interface/top-level: command > unit("type") + unit(func("name")) + ...
+            #   Class method:        command > unit("type") + block(unit(func("name")) + {})
+            # Check direct unit children first, then units inside the block.
+            units_to_check = list(units)
+            if block:
+                units_to_check += [c for c in block.children if c.type == "unit"]
+            for unit in units_to_check:
+                method_name = _func_name_in_unit(unit)
+                if method_name:
+                    qualified = f"{scope}.{method_name}" if scope else method_name
+                    kind = "method" if scope else "function"
+                    # Build a readable signature from source
+                    raw = source[node.start_byte:node.start_byte + min(120, node.end_byte - node.start_byte)]
+                    sig = raw.split("{")[0].strip()
+                    sym = Symbol(
+                        id=make_symbol_id(filename, qualified, kind),
+                        file=filename,
+                        name=method_name,
+                        qualified_name=qualified,
+                        kind=kind,
+                        language="groovy",
+                        signature=sig,
+                        docstring="",
+                        line=node.start_point[0] + 1,
+                        end_line=node.end_point[0] + 1,
+                        byte_offset=node.start_byte,
+                        byte_length=node.end_byte - node.start_byte,
+                        content_hash=compute_content_hash(source_bytes[node.start_byte:node.end_byte]),
+                    )
+                    symbols.append(sym)
+                    break
+
+    _walk_commands(tree.root_node.children)
+    return symbols
