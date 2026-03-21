@@ -172,6 +172,36 @@ def test_delete_index(tmp_path):
     assert not store.has_index("local", "test-abc123")
 
 
+def test_delete_and_recreate_same_process(tmp_path):
+    """delete_index clears _initialized_dbs so a recreate succeeds in the same process.
+
+    Without the discard, _connect skips the table_info check and the second save
+    fails with 'no such table' because the fresh DB was never schema-initialised.
+    """
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+
+    store.save_index(
+        owner="local", name="test-abc123",
+        source_files=["a.py"], symbols=[], raw_files={"a.py": "x"},
+    )
+    assert store.has_index("local", "test-abc123")
+
+    store.delete_index("local", "test-abc123")
+    assert not store.has_index("local", "test-abc123")
+
+    # Recreating the same repo must succeed — this would raise
+    # sqlite3.OperationalError: no such table: symbols
+    store.save_index(
+        owner="local", name="test-abc123",
+        source_files=["b.py"], symbols=[], raw_files={"b.py": "y"},
+    )
+    assert store.has_index("local", "test-abc123")
+
+    index = store.load_index("local", "test-abc123")
+    assert index is not None
+    assert index.source_files == ["b.py"]
+
+
 def test_list_repos(tmp_path):
     """list_repos finds all indexed repos."""
     store = SQLiteIndexStore(base_path=str(tmp_path))

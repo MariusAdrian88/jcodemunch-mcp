@@ -1006,6 +1006,8 @@ async def _run_server_with_watcher(
         pass  # Clean shutdown via Ctrl+C
     finally:
         stop_event.set()
+        from .storage import IndexStore
+        IndexStore(base_path=watcher_kwargs.get("storage_path") or os.environ.get("CODE_INDEX_PATH")).close()
         try:
             await asyncio.wait_for(watcher_task, timeout=5.0)
         except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -1029,12 +1031,16 @@ async def run_stdio_server():
         os.environ.get("CODE_INDEX_PATH", "~/.code-index/"),
         _default_use_ai_summaries(),
     )
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        from .storage import IndexStore
+        IndexStore(base_path=os.environ.get("CODE_INDEX_PATH")).close()
 
 
 def _make_auth_middleware():

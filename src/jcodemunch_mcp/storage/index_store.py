@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from filelock import FileLock
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -208,6 +207,22 @@ class IndexStore:
 
         self.base_path.mkdir(parents=True, exist_ok=True)
         self._sqlite = SQLiteIndexStore(base_path=base_path)
+
+    def close(self) -> None:
+        """Checkpoint and close all WAL files for every indexed repo.
+
+        Call from server shutdown to compact WAL files before exit.
+        Safe to call multiple times or when no repos are indexed.
+        """
+        if not self.base_path.exists():
+            return
+        for db_file in self.base_path.glob("*.db"):
+            slug = db_file.stem  # e.g. "local-myrepo-abc123"
+            # Extract owner and name from the slug: first segment = owner, rest = name
+            parts = slug.split("-", 1)
+            if len(parts) == 2:
+                owner, name = parts
+                self._sqlite.checkpoint_and_close(owner, name)
 
     def _safe_repo_component(self, value: str, field_name: str) -> str:
         """Validate and sanitize owner/name components used in on-disk cache paths.
@@ -463,29 +478,11 @@ class IndexStore:
     def get_symbol_content(self, owner: str, name: str, symbol_id: str, _index: Optional["CodeIndex"] = None) -> Optional[str]:
         """Read symbol source using stored byte offsets.
 
+        Delegates to the SQLite backend for a single-row lookup.
         Pass _index to avoid a redundant load_index() call when the caller
         already holds a loaded index.
         """
-        index = _index or self.load_index(owner, name)
-        if not index:
-            return None
-
-        symbol = index.get_symbol(symbol_id)
-        if not symbol:
-            return None
-
-        file_path = self._safe_content_path(self._content_dir(owner, name), symbol["file"])
-        if not file_path:
-            return None
-
-        if not file_path.exists():
-            return None
-
-        with open(file_path, "rb") as f:
-            f.seek(symbol["byte_offset"])
-            source_bytes = f.read(symbol["byte_length"])
-
-        return source_bytes.decode("utf-8", errors="replace")
+        return self._sqlite.get_symbol_content(owner, name, symbol_id, _index)
 
     def get_file_content(
         self,
@@ -495,15 +492,7 @@ class IndexStore:
         _index: Optional["CodeIndex"] = None,
     ) -> Optional[str]:
         """Read a cached file's full content."""
-        index = _index or self.load_index(owner, name)
-        if not index or not index.has_source_file(file_path):
-            return None
-
-        content_path = self._safe_content_path(self._content_dir(owner, name), file_path)
-        if not content_path or not content_path.exists():
-            return None
-
-        return self._read_cached_text(content_path)
+        return self._sqlite.get_file_content(owner, name, file_path, _index)
 
     def detect_changes(
         self,
@@ -523,25 +512,9 @@ class IndexStore:
     ) -> tuple[list[str], list[str], list[str]]:
         """Detect changed, new, and deleted files from precomputed hashes.
 
-        Like detect_changes() but avoids requiring full file contents in memory.
+        Delegates to the SQLite backend for a single-row lookup.
         """
-        index = self.load_index(owner, name)
-        if not index:
-            return [], list(current_hashes.keys()), []
-
-        old_hashes = index.file_hashes
-
-        old_set = set(old_hashes.keys())
-        new_set = set(current_hashes.keys())
-
-        new_files = list(new_set - old_set)
-        deleted_files = list(old_set - new_set)
-        changed_files = [
-            fp for fp in (old_set & new_set)
-            if old_hashes[fp] != current_hashes[fp]
-        ]
-
-        return changed_files, new_files, deleted_files
+        return self._sqlite.detect_changes_from_hashes(owner, name, current_hashes)
 
     def detect_changes_with_mtimes(
         self,
@@ -552,9 +525,7 @@ class IndexStore:
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, float]]:
         """Fast-path change detection using mtimes, falling back to hash on mismatch.
 
-        For files whose mtime hasn't changed, no hash is computed (O(1) stat check).
-        When mtime differs, hash_fn is called to compute SHA-256 and compare against
-        the stored hash.
+        Delegates to the SQLite backend for a single-row lookup.
 
         Args:
             owner: Repository owner.
@@ -565,55 +536,8 @@ class IndexStore:
         Returns:
             Tuple of (changed_files, new_files, deleted_files,
                       hashes_for_changed_and_new, updated_mtimes).
-            The hashes dict contains entries only for files that were actually hashed
-            (changed + new). The mtimes dict is a complete set for all current files
-            (unchanged files keep their current mtime).
         """
-        index = self.load_index(owner, name)
-        if not index:
-            # No existing index — all files are new, hash them all.
-            hashes: dict[str, str] = {}
-            for fp in current_mtimes:
-                hashes[fp] = hash_fn(fp)
-            return [], list(current_mtimes.keys()), [], hashes, dict(current_mtimes)
-
-        old_hashes = index.file_hashes
-        old_mtimes = index.file_mtimes
-
-        old_set = set(old_hashes.keys())
-        new_set = set(current_mtimes.keys())
-
-        new_files = sorted(new_set - old_set)
-        deleted_files = sorted(old_set - new_set)
-
-        changed_files: list[str] = []
-        computed_hashes: dict[str, str] = {}
-        updated_mtimes: dict[str, float] = {}
-
-        # Check files present in both old and new indexes.
-        for fp in sorted(old_set & new_set):
-            cur_mtime = current_mtimes[fp]
-            old_mtime = old_mtimes.get(fp)
-
-            if old_mtime is not None and cur_mtime == old_mtime:
-                # mtime unchanged — skip hash, file is unchanged.
-                updated_mtimes[fp] = cur_mtime
-                continue
-
-            # mtime differs (or no stored mtime) — compute hash to verify.
-            h = hash_fn(fp)
-            if h != old_hashes[fp]:
-                changed_files.append(fp)
-                computed_hashes[fp] = h
-            # Update mtime regardless (covers touched-but-unchanged case).
-            updated_mtimes[fp] = cur_mtime
-
-        # Hash all new files.
-        for fp in new_files:
-            computed_hashes[fp] = hash_fn(fp)
-            updated_mtimes[fp] = current_mtimes[fp]
-
-        return changed_files, new_files, deleted_files, computed_hashes, updated_mtimes
+        return self._sqlite.detect_changes_with_mtimes(owner, name, current_mtimes, hash_fn)
 
     def incremental_save(
         self,

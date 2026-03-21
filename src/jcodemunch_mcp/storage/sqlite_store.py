@@ -11,7 +11,7 @@ import shutil
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from ..parser.symbols import Symbol
 
@@ -74,14 +74,16 @@ _META_KEYS = [
     "languages", "context_metadata",
 ]
 
-# Lazily initialized to avoid circular import with index_store
-_INDEX_VERSION: int = 0
+# Lazily initialised to avoid circular import with index_store.
+# None = not yet loaded; any accidental read before _ensure_index_store_deps()
+# fires raises TypeError("'>' not supported between 'NoneType' and 'int'").
+_INDEX_VERSION: Optional[int] = None
 _file_hash: Callable[[str], str] = lambda x: ""
 
 
 def _ensure_index_store_deps() -> None:
     global _INDEX_VERSION, _file_hash
-    if _INDEX_VERSION == 0:
+    if _INDEX_VERSION is None:
         from .index_store import INDEX_VERSION, _file_hash as _fh
         _INDEX_VERSION = INDEX_VERSION
         _file_hash = _fh
@@ -93,6 +95,10 @@ class SQLiteIndexStore:
     One .db file per repo at {base_path}/{slug}.db.
     Content cache remains as individual files at {base_path}/{slug}/.
     """
+
+    # Per-process set of DB paths that have had their schema initialised.
+    # Skips the ~0.1 ms executescript() overhead on every subsequent connect.
+    _initialized_dbs: set[str] = set()
 
     def __init__(self, base_path: Optional[str] = None) -> None:
         """Initialize store.
@@ -114,12 +120,19 @@ class SQLiteIndexStore:
         return self.base_path / f"{slug}.db"
 
     def _connect(self, db_path: Path) -> sqlite3.Connection:
-        """Open a connection with WAL pragmas and schema ensured."""
+        """Open a connection with WAL pragmas and schema ensured on first visit."""
         conn = sqlite3.connect(str(db_path), isolation_level=None)  # autocommit
         conn.row_factory = sqlite3.Row
         for pragma in _PRAGMAS:
             conn.execute(pragma)
-        conn.executescript(_SCHEMA_SQL)
+
+        db_key = str(db_path)
+        if db_key not in SQLiteIndexStore._initialized_dbs:
+            # Lightweight check: table_info returns column list; empty = not initialised.
+            if not conn.execute("PRAGMA table_info(meta)").fetchall():
+                conn.executescript(_SCHEMA_SQL)
+            SQLiteIndexStore._initialized_dbs.add(db_key)
+
         return conn
 
     def checkpoint_and_close(self, owner: str, name: str) -> None:
@@ -234,7 +247,7 @@ class SQLiteIndexStore:
             source_files=normalized_source_files,
             languages=languages or {},
             symbols=serialized_symbols,
-            index_version=_INDEX_VERSION,
+            index_version=cast(int, _INDEX_VERSION),
             file_hashes=file_hashes,
             git_head=git_head,
             file_summaries=file_summaries or {},
@@ -315,7 +328,7 @@ class SQLiteIndexStore:
                 return None
 
             stored_version = int(meta.get("index_version", "0"))
-            if stored_version > _INDEX_VERSION:
+            if stored_version > cast(int, _INDEX_VERSION):
                 logger.warning("Index version %d > current %d for %s/%s", stored_version, _INDEX_VERSION, owner, name)
                 return None
 
@@ -471,7 +484,14 @@ class SQLiteIndexStore:
         current_mtimes: dict[str, float],
         hash_fn: Callable[[str], str],
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, float]]:
-        """Fast-path change detection using mtimes, falling back to hash."""
+        """Fast-path change detection using mtimes, falling back to hash.
+
+        Note: Files stored with an empty/NULL hash in the DB are excluded from
+        change detection. Since a missing hash means the file was not fully
+        indexed (e.g., content was never cached), it is treated as if it does
+        not exist in the DB and will be re-indexed as a "new file" on the next
+        run. This is safe by design — an unindexed file is indistinguishable
+        from a deleted file for the purposes of incremental updates."""
         db_path = self._db_path(owner, name)
         if not db_path.exists():
             # No existing index — all files are new, hash them all.
@@ -581,28 +601,28 @@ class SQLiteIndexStore:
 
     def _list_repo_from_db(self, db_path: Path) -> Optional[dict]:
         """Read repo metadata from a .db file for list_repos."""
+        conn = self._connect(db_path)
         try:
-            conn = self._connect(db_path)
             meta = self._read_meta(conn)
             symbol_count = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
             file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        finally:
             conn.close()
-            if not meta:
-                return None
-            languages = json.loads(meta.get("languages", "{}"))
-            return {
-                "repo": meta.get("repo", ""),
-                "indexed_at": meta.get("indexed_at", ""),
-                "symbol_count": symbol_count,
-                "file_count": file_count,
-                "languages": languages,
-                "index_version": int(meta.get("index_version", "0")),
-                "git_head": meta.get("git_head", ""),
-                "display_name": meta.get("display_name", ""),
-                "source_root": meta.get("source_root", ""),
-            }
-        except Exception:
+
+        if not meta:
             return None
+        languages = json.loads(meta.get("languages", "{}"))
+        return {
+            "repo": meta.get("repo", ""),
+            "indexed_at": meta.get("indexed_at", ""),
+            "symbol_count": symbol_count,
+            "file_count": file_count,
+            "languages": languages,
+            "index_version": int(meta.get("index_version", "0")),
+            "git_head": meta.get("git_head", ""),
+            "display_name": meta.get("display_name", ""),
+            "source_root": meta.get("source_root", ""),
+        }
 
     def delete_index(self, owner: str, name: str) -> bool:
         """Delete a repo's .db, .db-wal, .db-shm, and content dir."""
@@ -612,6 +632,7 @@ class SQLiteIndexStore:
         if db_path.exists():
             db_path.unlink()
             deleted = True
+            SQLiteIndexStore._initialized_dbs.discard(str(db_path))
 
         wal_path = Path(str(db_path) + "-wal")
         if wal_path.exists():
@@ -957,6 +978,7 @@ class SQLiteIndexStore:
         db_path = self._db_path(owner, name)
         conn = self._connect(db_path)
         try:
+            conn.execute("BEGIN")
             # Write meta
             meta_keys = {
                 "repo": data.get("repo", f"{owner}/{name}"),

@@ -237,7 +237,7 @@ def test_save_index_rejects_path_separator_in_name(tmp_path):
     """Reject names that contain path separators (/ or \\)."""
     store = IndexStore(base_path=str(tmp_path))
 
-    with pytest.raises(ValueError, match="Invalid name"):
+    with pytest.raises(ValueError, match="Path separator not allowed in name"):
         store.save_index(
             owner="owner",
             name="repo/evil",
@@ -265,7 +265,8 @@ def test_save_index_sanitizes_special_chars_in_name(tmp_path):
     index = store.load_index("local", "my project (v2)")
     assert index is not None
     # The on-disk file should use the sanitized name (spaces/parens → hyphens, collapsed)
-    assert (tmp_path / "local-my-project-v2.json").exists()
+    # "my project (v2)" → "my-project-v2" (--- collapses to single -)
+    assert (tmp_path / "local-my-project-v2.db").exists()
 
 
 def test_load_index_backfills_new_metadata_for_legacy_indexes(tmp_path):
@@ -542,8 +543,8 @@ def test_has_source_file_populated_index():
 
 
 def test_index_integrity_checksum(tmp_path):
-    """save_index writes a .sha256 sidecar; load_index verifies it."""
-    import hashlib
+    """save_index writes a .db file with WAL mode; load_index reads it back."""
+    import sqlite3
     store = IndexStore(base_path=str(tmp_path))
 
     store.save_index(
@@ -555,23 +556,20 @@ def test_index_integrity_checksum(tmp_path):
         languages={"python": 1},
     )
 
-    # Sidecar should exist
-    sha_path = tmp_path / "check-sum.json.sha256"
-    assert sha_path.exists()
+    # SQLite .db file should exist
+    db_path = tmp_path / "check-sum.db"
+    assert db_path.exists()
 
-    # Checksum should match the index file
-    index_path = tmp_path / "check-sum.json"
-    actual_sha = hashlib.sha256(index_path.read_bytes()).hexdigest()
-    assert sha_path.read_text(encoding="utf-8").strip() == actual_sha
-
-    # Load should succeed with valid checksum
+    # Load should succeed from the SQLite backend
     loaded = store.load_index("check", "sum")
     assert loaded is not None
+    assert loaded.name == "sum"
+    assert loaded.owner == "check"
 
-    # Corrupted checksum logs a warning but still loads (non-blocking)
-    sha_path.write_text("bad_checksum", encoding="utf-8")
-    loaded = store.load_index("check", "sum")
-    assert loaded is not None  # warns but still loads
+    # Corrupting the db file raises DatabaseError
+    db_path.write_bytes(b"not a sqlite db")
+    with pytest.raises(sqlite3.DatabaseError):
+        store.load_index("check", "sum")
 
 
 def test_schema_validation_rejects_missing_fields(tmp_path):
