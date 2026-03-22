@@ -50,8 +50,10 @@ def search_text(
     max_results = max(1, min(max_results, 100))
     context_lines = max(0, min(context_lines, 10))
 
-    # Compile a single regex for both user-regex and substring modes.
-    # Avoids per-line .lower() allocation for substring search.
+    # For regex mode, compile the user pattern. For substring mode, use
+    # Python's optimized `in` operator (faster than re.search per line).
+    pattern = None
+    query_lower = None
     if is_regex:
         if len(query) > _MAX_REGEX_LEN:
             return {"error": f"Regex too long ({len(query)} chars, max {_MAX_REGEX_LEN})"}
@@ -62,7 +64,7 @@ def search_text(
         except re.error as e:
             return {"error": f"Invalid regex: {e}"}
     else:
-        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        query_lower = query.lower()
 
     try:
         owner, name = resolve_repo(repo, storage_path)
@@ -105,7 +107,8 @@ def search_text(
         lines = content.split("\n")
         file_matches = []
         for line_index, line in enumerate(lines):
-            if not pattern.search(line):
+            hit = pattern.search(line) if pattern else (query_lower in line.lower())
+            if not hit:
                 continue
             text = line.rstrip()[:200]
             match = {
