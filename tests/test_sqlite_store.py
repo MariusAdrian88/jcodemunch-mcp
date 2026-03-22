@@ -311,3 +311,165 @@ def test_get_file_languages(tmp_path):
     fl = store.get_file_languages("local", "test-abc123")
     assert fl == {"a.py": "python", "b.js": "javascript"}
 
+
+def test_load_index_cache_hit(tmp_path):
+    """Second load_index call returns cached result without DB access."""
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    store.save_index(
+        owner="local", name="cache-test",
+        source_files=["a.py"], symbols=[_make_symbol("f")],
+        raw_files={"a.py": "x"},
+    )
+    # First load — cold cache
+    idx1 = store.load_index("local", "cache-test")
+    assert idx1 is not None
+
+    # Second load — should be cache hit (same object)
+    idx2 = store.load_index("local", "cache-test")
+    assert idx2 is idx1  # exact same object from cache
+
+
+def test_load_index_cache_invalidated_on_save(tmp_path):
+    """save_index invalidates the cache by updating mtime and pre-warming."""
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    store.save_index(
+        owner="local", name="cache-test",
+        source_files=["a.py"], symbols=[_make_symbol("f")],
+        raw_files={"a.py": "x"},
+    )
+    idx1 = store.load_index("local", "cache-test")
+    assert len(idx1.symbols) == 1
+
+    # Re-save with different symbols
+    import time; time.sleep(0.01)  # ensure mtime changes
+    store.save_index(
+        owner="local", name="cache-test",
+        source_files=["a.py"], symbols=[_make_symbol("f"), _make_symbol("g")],
+        raw_files={"a.py": "x"},
+    )
+    idx2 = store.load_index("local", "cache-test")
+    assert len(idx2.symbols) == 2
+    assert idx2 is not idx1
+
+
+def test_load_index_cache_cleared_on_delete(tmp_path):
+    """delete_index evicts from cache."""
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    store.save_index(
+        owner="local", name="cache-test",
+        source_files=["a.py"], symbols=[], raw_files={"a.py": "x"},
+    )
+    idx1 = store.load_index("local", "cache-test")
+    assert idx1 is not None
+
+    store.delete_index("local", "cache-test")
+    idx2 = store.load_index("local", "cache-test")
+    assert idx2 is None
+
+
+def test_v4_to_v5_migration(tmp_path):
+    """Opening a v4 database auto-migrates to v5 with promoted columns."""
+    import json as _json
+
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    db_path = store._db_path("local", "migrate-test")
+
+    # Create a v4 database manually
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript("""\
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE symbols (
+            id TEXT PRIMARY KEY, file TEXT NOT NULL, name TEXT NOT NULL,
+            kind TEXT, signature TEXT, summary TEXT, docstring TEXT,
+            line INTEGER, end_line INTEGER, byte_offset INTEGER,
+            byte_length INTEGER, parent TEXT, data TEXT
+        );
+        CREATE TABLE files (
+            path TEXT PRIMARY KEY, hash TEXT, mtime_ns INTEGER,
+            language TEXT, summary TEXT, blob_sha TEXT, imports TEXT
+        );
+    """)
+    conn.execute("INSERT INTO meta VALUES ('index_version', '4')")
+    conn.execute("INSERT INTO meta VALUES ('repo', 'local/migrate-test')")
+    conn.execute("INSERT INTO meta VALUES ('owner', 'local')")
+    conn.execute("INSERT INTO meta VALUES ('name', 'migrate-test')")
+    conn.execute("INSERT INTO meta VALUES ('indexed_at', '2025-01-01')")
+    conn.execute("INSERT INTO meta VALUES ('languages', '{}')")
+    conn.execute("INSERT INTO meta VALUES ('context_metadata', '{}')")
+    # Insert a v4 symbol with data JSON
+    data_json = _json.dumps({
+        "qualified_name": "my_func",
+        "language": "python",
+        "decorators": ["@staticmethod"],
+        "keywords": ["async"],
+        "content_hash": "abc123",
+        "ecosystem_context": "",
+    })
+    conn.execute(
+        "INSERT INTO symbols VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("main.py::my_func#function", "main.py", "my_func", "function",
+         "def my_func()", "", "", 1, 3, 0, 20, None, data_json),
+    )
+    conn.execute(
+        "INSERT INTO files VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("main.py", "hash1", None, "python", "", "", "[]"),
+    )
+    conn.commit()
+    conn.close()
+
+    # Clear _initialized_dbs so _connect will re-check
+    SQLiteIndexStore._initialized_dbs.discard(str(db_path))
+
+    # Now load — should trigger v4→v5 migration
+    idx = store.load_index("local", "migrate-test")
+    assert idx is not None
+    sym = idx.symbols[0]
+    assert sym["qualified_name"] == "my_func"
+    assert sym["language"] == "python"
+    assert sym["decorators"] == ["@staticmethod"]
+    assert sym["keywords"] == ["async"]
+    assert sym["content_hash"] == "abc123"
+
+    # Verify data column is now NULL
+    conn2 = sqlite3.connect(str(db_path))
+    row = conn2.execute("SELECT data FROM symbols LIMIT 1").fetchone()
+    assert row[0] is None
+    conn2.close()
+
+
+def test_v5_schema_no_json_in_data(tmp_path):
+    """New indexes written with v5 schema have data=NULL and new columns populated."""
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    sym = Symbol(
+        id="main.py::hello#function", file="main.py", name="hello",
+        qualified_name="hello", kind="function", language="python",
+        signature="def hello()", line=1, end_line=2,
+        byte_offset=0, byte_length=10, content_hash="xyz",
+        decorators=["@app.route"], keywords=["flask"],
+    )
+    store.save_index(
+        owner="local", name="v5-test",
+        source_files=["main.py"], symbols=[sym],
+        raw_files={"main.py": "def hello(): pass"},
+    )
+
+    # Check raw DB: data should be NULL, new columns should be populated
+    db_path = store._db_path("local", "v5-test")
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute("SELECT * FROM symbols LIMIT 1").fetchone()
+    cols = [desc[0] for desc in conn.execute("SELECT * FROM symbols LIMIT 0").description]
+    row_dict = dict(zip(cols, row))
+    assert row_dict["data"] is None
+    assert row_dict["qualified_name"] == "hello"
+    assert row_dict["language"] == "python"
+    assert row_dict["content_hash"] == "xyz"
+    conn.close()
+
+    # Also verify round-trip through load_index
+    idx = store.load_index("local", "v5-test")
+    s = idx.symbols[0]
+    assert s["qualified_name"] == "hello"
+    assert s["decorators"] == ["@app.route"]
+    assert s["keywords"] == ["flask"]
+    assert s["content_hash"] == "xyz"
+

@@ -9,9 +9,11 @@ import logging
 import os
 import shutil
 import sqlite3
+import threading
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, Callable, NamedTuple, Optional, cast
 
 from ..parser.symbols import Symbol
 
@@ -28,19 +30,25 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
-    id         TEXT PRIMARY KEY,
-    file       TEXT NOT NULL,
-    name       TEXT NOT NULL,
-    kind       TEXT,
-    signature  TEXT,
-    summary    TEXT,
-    docstring  TEXT,
-    line       INTEGER,
-    end_line   INTEGER,
-    byte_offset INTEGER,
-    byte_length INTEGER,
-    parent     TEXT,
-    data       TEXT
+    id                TEXT PRIMARY KEY,
+    file              TEXT NOT NULL,
+    name              TEXT NOT NULL,
+    kind              TEXT,
+    signature         TEXT,
+    summary           TEXT,
+    docstring         TEXT,
+    line              INTEGER,
+    end_line          INTEGER,
+    byte_offset       INTEGER,
+    byte_length       INTEGER,
+    parent            TEXT,
+    qualified_name    TEXT,
+    language          TEXT,
+    decorators        TEXT,
+    keywords          TEXT,
+    content_hash      TEXT,
+    ecosystem_context TEXT,
+    data              TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file);
@@ -60,11 +68,17 @@ CREATE TABLE IF NOT EXISTS files (
 
 # Pragmas set on every connection open
 _PRAGMAS = [
-    "PRAGMA journal_mode = WAL",
     "PRAGMA synchronous = NORMAL",
     "PRAGMA wal_autocheckpoint = 1000",
     "PRAGMA cache_size = -8000",
     "PRAGMA busy_timeout = 5000",
+    "PRAGMA mmap_size = 268435456",   # 256 MB memory-mapped I/O
+    "PRAGMA temp_store = MEMORY",
+]
+
+# Pragmas set only once per database file (persistent after first set)
+_INIT_PRAGMAS = [
+    "PRAGMA journal_mode = WAL",
 ]
 
 # Keys stored in the meta table
@@ -87,6 +101,98 @@ def _ensure_index_store_deps() -> None:
         from .index_store import INDEX_VERSION, _file_hash as _fh
         _INDEX_VERSION = INDEX_VERSION
         _file_hash = _fh
+
+
+# ── In-memory CodeIndex cache ──────────────────────────────────────
+# Mirrors the old @functools.lru_cache(maxsize=16) on JSON load.
+# Module-level because every tool creates a new IndexStore() per call.
+# Thread-safe: watcher runs incremental_save from a background thread.
+
+class _CacheEntry(NamedTuple):
+    mtime_ns: int
+    code_index: "CodeIndex"
+
+
+_index_cache: OrderedDict[tuple[str, str], _CacheEntry] = OrderedDict()
+_cache_lock = threading.Lock()
+_CACHE_MAX_SIZE = 16
+
+
+def _cache_get(owner: str, name: str, mtime_ns: int) -> Optional["CodeIndex"]:
+    """Return cached CodeIndex if fresh, else None."""
+    key = (owner, name)
+    with _cache_lock:
+        entry = _index_cache.get(key)
+        if entry is not None and entry.mtime_ns == mtime_ns:
+            _index_cache.move_to_end(key)  # LRU touch
+            return entry.code_index
+    return None
+
+
+def _cache_put(owner: str, name: str, mtime_ns: int, code_index: "CodeIndex") -> None:
+    """Store a CodeIndex in the cache, evicting LRU if full."""
+    key = (owner, name)
+    with _cache_lock:
+        _index_cache[key] = _CacheEntry(mtime_ns, code_index)
+        _index_cache.move_to_end(key)
+        while len(_index_cache) > _CACHE_MAX_SIZE:
+            _index_cache.popitem(last=False)
+
+
+def _cache_evict(owner: str, name: str) -> None:
+    """Remove a specific repo from cache."""
+    with _cache_lock:
+        _index_cache.pop((owner, name), None)
+
+
+def _cache_clear() -> None:
+    """Clear entire index cache.
+
+    Not called internally — provided for external callers (e.g. test teardown,
+    future server-level invalidation). Per-repo eviction is handled by
+    _cache_evict() which is wired into delete_index().
+    """
+    with _cache_lock:
+        _index_cache.clear()
+
+
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """Migrate a v4 database to v5: promote data JSON fields to real columns."""
+    # Add new columns (IF NOT EXISTS not supported by ALTER TABLE, so check first)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(symbols)").fetchall()}
+    new_cols = [
+        ("qualified_name", "TEXT"),
+        ("language", "TEXT"),
+        ("decorators", "TEXT"),
+        ("keywords", "TEXT"),
+        ("content_hash", "TEXT"),
+        ("ecosystem_context", "TEXT"),
+    ]
+    for col_name, col_type in new_cols:
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE symbols ADD COLUMN {col_name} {col_type}")
+
+    conn.execute("BEGIN")
+    # Populate new columns from data JSON
+    conn.execute("""\
+        UPDATE symbols SET
+            qualified_name    = COALESCE(json_extract(data, '$.qualified_name'), name),
+            language          = COALESCE(json_extract(data, '$.language'), ''),
+            decorators        = COALESCE(json_extract(data, '$.decorators'), '[]'),
+            keywords          = COALESCE(json_extract(data, '$.keywords'), '[]'),
+            content_hash      = COALESCE(json_extract(data, '$.content_hash'), ''),
+            ecosystem_context = COALESCE(json_extract(data, '$.ecosystem_context'), ''),
+            data              = NULL
+        WHERE data IS NOT NULL
+    """)
+
+    # Update version in meta
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        ("index_version", "5"),
+    )
+    conn.execute("COMMIT")
+    logger.info("Migrated symbols table from v4 to v5 (promoted data fields to columns)")
 
 
 class SQLiteIndexStore:
@@ -128,9 +234,23 @@ class SQLiteIndexStore:
 
         db_key = str(db_path)
         if db_key not in SQLiteIndexStore._initialized_dbs:
+            # One-time pragmas (persistent on the db file)
+            for pragma in _INIT_PRAGMAS:
+                conn.execute(pragma)
+
             # Lightweight check: table_info returns column list; empty = not initialised.
             if not conn.execute("PRAGMA table_info(meta)").fetchall():
                 conn.executescript(_SCHEMA_SQL)
+            else:
+                # Existing DB — check if v4→v5 migration is needed
+                _ensure_index_store_deps()
+                row = conn.execute(
+                    "SELECT value FROM meta WHERE key = 'index_version'"
+                ).fetchone()
+                stored_version = int(row[0]) if row else 0
+                if stored_version < 5:
+                    _migrate_v4_to_v5(conn)
+
             SQLiteIndexStore._initialized_dbs.add(db_key)
 
         return conn
@@ -280,8 +400,10 @@ class SQLiteIndexStore:
             # Insert symbols
             conn.executemany(
                 "INSERT INTO symbols (id, file, name, kind, signature, summary, "
-                "docstring, line, end_line, byte_offset, byte_length, parent, data) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "docstring, line, end_line, byte_offset, byte_length, parent, "
+                "qualified_name, language, decorators, keywords, content_hash, "
+                "ecosystem_context, data) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [self._symbol_to_row(s) for s in symbols],
             )
 
@@ -317,6 +439,8 @@ class SQLiteIndexStore:
             file_dest.parent.mkdir(parents=True, exist_ok=True)
             self._write_cached_text(file_dest, content)
 
+        # Pre-warm cache so the next load_index() is instant
+        _cache_put(owner, name, db_path.stat().st_mtime_ns, index)
         return index
 
     def load_index(self, owner: str, name: str) -> Optional["CodeIndex"]:
@@ -327,6 +451,15 @@ class SQLiteIndexStore:
         db_path = self._db_path(owner, safe_name)
         if not db_path.exists():
             return None
+
+        # Check in-memory cache (mirrors old @lru_cache on JSON load)
+        try:
+            mtime_ns = db_path.stat().st_mtime_ns
+        except OSError:
+            return None  # file was deleted between exists() and stat()
+        cached = _cache_get(owner, safe_name, mtime_ns)
+        if cached is not None:
+            return cached
 
         conn = self._connect(db_path)
         try:
@@ -342,9 +475,17 @@ class SQLiteIndexStore:
             symbol_rows = conn.execute("SELECT * FROM symbols").fetchall()
             file_rows = conn.execute("SELECT * FROM files").fetchall()
 
-            return self._build_index_from_rows(meta, symbol_rows, file_rows, owner, name)
+            index = self._build_index_from_rows(meta, symbol_rows, file_rows, owner, name)
         finally:
             conn.close()
+
+        # Populate cache (re-stat to capture any WAL checkpoint mtime change)
+        try:
+            post_mtime_ns = db_path.stat().st_mtime_ns
+        except OSError:
+            post_mtime_ns = mtime_ns  # file gone; cache with pre-load mtime
+        _cache_put(owner, safe_name, post_mtime_ns, index)
+        return index
 
     def has_index(self, owner: str, name: str) -> bool:
         """Return True if a .db file exists for this repo."""
@@ -405,8 +546,10 @@ class SQLiteIndexStore:
             if new_symbols:
                 conn.executemany(
                     "INSERT OR REPLACE INTO symbols (id, file, name, kind, signature, summary, "
-                    "docstring, line, end_line, byte_offset, byte_length, parent, data) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "docstring, line, end_line, byte_offset, byte_length, parent, "
+                    "qualified_name, language, decorators, keywords, content_hash, "
+                    "ecosystem_context, data) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [self._symbol_to_row(s) for s in new_symbols],
                 )
 
@@ -496,7 +639,10 @@ class SQLiteIndexStore:
             self._write_cached_text(dest, content)
 
         # Build CodeIndex from already-fetched rows (no second round-trip)
-        return self._build_index_from_rows(meta, all_symbol_rows, all_file_rows, owner, name)
+        index = self._build_index_from_rows(meta, all_symbol_rows, all_file_rows, owner, name)
+        # Pre-warm cache so the next load_index() is instant
+        _cache_put(owner, name, db_path.stat().st_mtime_ns, index)
+        return index
 
     def detect_changes_with_mtimes(
         self,
@@ -647,6 +793,7 @@ class SQLiteIndexStore:
 
     def delete_index(self, owner: str, name: str) -> bool:
         """Delete a repo's .db, .db-wal, .db-shm, and content dir."""
+        _cache_evict(owner, name)
         db_path = self._db_path(owner, name)
         deleted = False
 
@@ -747,44 +894,63 @@ class SQLiteIndexStore:
     # ── Internal helpers ────────────────────────────────────────────
 
     def _symbol_to_row(self, symbol: Symbol) -> tuple:
-        """Convert a Symbol to a row tuple for INSERT."""
-        data = json.dumps({
-            "qualified_name": symbol.qualified_name,
-            "language": symbol.language,
-            "decorators": symbol.decorators,
-            "keywords": symbol.keywords,
-            "content_hash": symbol.content_hash,
-            "ecosystem_context": getattr(symbol, "ecosystem_context", ""),
-        })
+        """Convert a Symbol to a row tuple for INSERT (v5 schema)."""
         return (
             symbol.id, symbol.file, symbol.name, symbol.kind,
             symbol.signature, symbol.summary, symbol.docstring,
             symbol.line, symbol.end_line,
             symbol.byte_offset, symbol.byte_length,
-            symbol.parent, data,
+            symbol.parent,
+            symbol.qualified_name,
+            symbol.language,
+            json.dumps(symbol.decorators) if symbol.decorators else "[]",
+            json.dumps(symbol.keywords) if symbol.keywords else "[]",
+            symbol.content_hash,
+            getattr(symbol, "ecosystem_context", ""),
+            None,  # data column — no longer used in v5
         )
 
     def _symbol_dict_to_row(self, d: dict) -> tuple:
-        """Convert a serialized symbol dict to a row tuple for INSERT."""
-        data = json.dumps({
-            "qualified_name": d.get("qualified_name", d.get("name", "")),
-            "language": d.get("language", ""),
-            "decorators": d.get("decorators", []),
-            "keywords": d.get("keywords", []),
-            "content_hash": d.get("content_hash", ""),
-            "ecosystem_context": d.get("ecosystem_context", ""),
-        })
+        """Convert a serialized symbol dict to a row tuple for INSERT (v5 schema)."""
+        decorators = d.get("decorators", [])
+        keywords = d.get("keywords", [])
         return (
             d["id"], d["file"], d["name"], d.get("kind", ""),
             d.get("signature", ""), d.get("summary", ""), d.get("docstring", ""),
             d.get("line", 0), d.get("end_line", 0),
             d.get("byte_offset", 0), d.get("byte_length", 0),
-            d.get("parent"), data,
+            d.get("parent"),
+            d.get("qualified_name", d.get("name", "")),
+            d.get("language", ""),
+            json.dumps(decorators) if decorators else "[]",
+            json.dumps(keywords) if keywords else "[]",
+            d.get("content_hash", ""),
+            d.get("ecosystem_context", ""),
+            None,  # data column — no longer used in v5
         )
 
     def _row_to_symbol_dict(self, row: sqlite3.Row) -> dict:
         """Convert a database row to a symbol dict (matches CodeIndex.symbols format)."""
-        data = json.loads(row["data"]) if row["data"] else {}
+        # v5: read directly from columns. Fallback to data JSON for mid-migration rows.
+        if row["data"]:
+            # Legacy v4 row (data not yet migrated) — parse JSON
+            data = json.loads(row["data"])
+            qualified_name = data.get("qualified_name", row["name"])
+            language = data.get("language", "")
+            decorators = data.get("decorators", [])
+            keywords = data.get("keywords", [])
+            content_hash = data.get("content_hash", "")
+            ecosystem_context = data.get("ecosystem_context", "")
+        else:
+            # v5 row — direct column reads, no JSON parsing
+            qualified_name = row["qualified_name"] or row["name"]
+            language = row["language"] or ""
+            deco_raw = row["decorators"]
+            decorators = json.loads(deco_raw) if deco_raw and deco_raw != "[]" else []
+            kw_raw = row["keywords"]
+            keywords = json.loads(kw_raw) if kw_raw and kw_raw != "[]" else []
+            content_hash = row["content_hash"] or ""
+            ecosystem_context = row["ecosystem_context"] or ""
         return {
             "id": row["id"],
             "file": row["file"],
@@ -793,17 +959,17 @@ class SQLiteIndexStore:
             "signature": row["signature"] or "",
             "summary": row["summary"] or "",
             "docstring": row["docstring"] or "",
-            "qualified_name": data.get("qualified_name", row["name"]),
-            "language": data.get("language", ""),
-            "decorators": data.get("decorators", []),
-            "keywords": data.get("keywords", []),
+            "qualified_name": qualified_name,
+            "language": language,
+            "decorators": decorators,
+            "keywords": keywords,
             "parent": row["parent"],
             "line": row["line"] or 0,
             "end_line": row["end_line"] or 0,
             "byte_offset": row["byte_offset"] or 0,
             "byte_length": row["byte_length"] or 0,
-            "content_hash": data.get("content_hash", ""),
-            "ecosystem_context": data.get("ecosystem_context", ""),
+            "content_hash": content_hash,
+            "ecosystem_context": ecosystem_context,
         }
 
     def _build_index_from_rows(
@@ -1022,8 +1188,10 @@ class SQLiteIndexStore:
             if symbols:
                 conn.executemany(
                     "INSERT OR REPLACE INTO symbols (id, file, name, kind, signature, summary, "
-                    "docstring, line, end_line, byte_offset, byte_length, parent, data) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "docstring, line, end_line, byte_offset, byte_length, parent, "
+                    "qualified_name, language, decorators, keywords, content_hash, "
+                    "ecosystem_context, data) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [self._symbol_dict_to_row(s) for s in symbols],
                 )
 

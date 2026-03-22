@@ -19,7 +19,7 @@ from .sqlite_store import SQLiteIndexStore
 logger = logging.getLogger(__name__)
 
 # Bump this when the index schema changes in an incompatible way.
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 
 
 @functools.lru_cache(maxsize=16)
