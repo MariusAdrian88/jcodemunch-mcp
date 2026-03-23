@@ -41,6 +41,7 @@ from .tools.suggest_queries import suggest_queries
 from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
 from .parser.symbols import VALID_KINDS
+from .reindex_state import wait_for_fresh_result
 
 
 try:
@@ -700,6 +701,25 @@ async def list_tools() -> list[Tool]:
                 "required": ["repo", "symbol"]
             }
         ),
+        Tool(
+            name="wait_for_fresh",
+            description="Wait for a repo's in-progress watcher reindex to finish, then return the fresh result. In strict freshness mode, blocks up to timeout_ms. In relaxed mode (default), returns immediately.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository identifier (owner/repo or just repo name)"
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Maximum time to wait in milliseconds (default 500)",
+                        "default": 500
+                    }
+                },
+                "required": ["repo"]
+            }
+        ),
     ]
 
 
@@ -988,6 +1008,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     repo=arguments["repo"],
                     storage_path=storage_path,
                 )
+            )
+        elif name == "wait_for_fresh":
+            result = await asyncio.to_thread(
+                wait_for_fresh_result,
+                repo=arguments["repo"],
+                timeout_ms=arguments.get("timeout_ms", 500),
             )
         else:
             result = {"error": f"Unknown tool: {name}"}
