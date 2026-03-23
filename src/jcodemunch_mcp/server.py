@@ -44,11 +44,15 @@ from .parser.symbols import VALID_KINDS
 from .reindex_state import wait_for_fresh_result, get_reindex_status, await_freshness_if_strict
 
 
-try:
-    from .watcher import watch_folders, WatcherError
-except ImportError:
-    watch_folders = None  # type: ignore[assignment, misc]
-    WatcherError = type("WatcherError", (Exception,), {})  # type: ignore[assignment, misc]
+# Tools excluded from strict freshness mode (don't wait for reindex)
+_EXCLUDED_FROM_STRICT = frozenset({
+    "list_repos",
+    "get_session_stats",
+    "wait_for_fresh",
+    "index_repo",
+    "index_folder",
+    "invalidate_cache",
+})
 
 
 logger = logging.getLogger(__name__)
@@ -752,6 +756,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text=json.dumps(
                     {"error": f"Input validation error: {e.message}"}, indent=2
                 ))]
+
+        # Strict freshness mode: wait for any in-progress reindex to complete
+        # before serving query results (except for write/index tools)
+        repo_arg = arguments.get("repo")
+        if (name not in _EXCLUDED_FROM_STRICT and repo_arg):
+            await_freshness_if_strict(repo_arg, timeout_ms=500)
+
         if name == "index_repo":
             result = await index_repo(
                 url=arguments["url"],
@@ -1626,6 +1637,12 @@ def main(argv: Optional[list[str]] = None):
         help="Log watcher output to file instead of stderr. "
              "Use --watcher-log for auto temp file, or --watcher-log=<path> for a specific file.",
     )
+    serve_parser.add_argument(
+        "--freshness-mode",
+        default=os.environ.get("JCODEMUNCH_FRESHNESS_MODE", "relaxed"),
+        choices=["relaxed", "strict"],
+        help="Freshness mode: 'relaxed' (default) or 'strict' (block queries until watcher reindex finishes)",
+    )
 
     # --- watch ---
     watch_parser = subparsers.add_parser(
@@ -1785,6 +1802,8 @@ def main(argv: Optional[list[str]] = None):
         )
     else:
         # serve (default)
+        from .reindex_state import set_freshness_mode
+        set_freshness_mode(args.freshness_mode)
         watcher_enabled = _get_watcher_enabled(args)
 
         if watcher_enabled:
