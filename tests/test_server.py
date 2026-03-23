@@ -393,7 +393,62 @@ async def test_suppress_meta_removes_meta_envelope():
 
 
 @pytest.mark.asyncio
-async def test_disabled_tools_removed_from_list_tools(monkeypatch):
+async def test_language_enum_reflects_config_limited(monkeypatch):
+    """Language enum should only include configured languages."""
+    from jcodemunch_mcp import config as config_module
+    from jcodemunch_mcp.parser.languages import LANGUAGE_REGISTRY
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["languages"] = ["python", "javascript"]
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []
+
+        tools = await list_tools()
+        search_symbols_tool = next((t for t in tools if t.name == "search_symbols"), None)
+        assert search_symbols_tool is not None
+
+        lang_param = search_symbols_tool.inputSchema.get("properties", {}).get("language", {})
+        enum_values = lang_param.get("enum", [])
+
+        assert "python" in enum_values
+        assert "javascript" in enum_values
+        assert "sql" not in enum_values
+        assert "rust" not in enum_values
+        # Should match exactly the configured languages
+        assert set(enum_values) == {"python", "javascript"}
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
+@pytest.mark.asyncio
+async def test_language_enum_all_languages_when_config_none(monkeypatch):
+    """When languages config is None, enum includes all registry languages."""
+    from jcodemunch_mcp import config as config_module
+    from jcodemunch_mcp.parser.languages import LANGUAGE_REGISTRY
+
+    orig_config = config_module._GLOBAL_CONFIG.copy()
+    config_module._GLOBAL_CONFIG.clear()
+
+    try:
+        config_module._GLOBAL_CONFIG["languages"] = None
+        config_module._GLOBAL_CONFIG["disabled_tools"] = []
+
+        tools = await list_tools()
+        search_symbols_tool = next((t for t in tools if t.name == "search_symbols"), None)
+        lang_param = search_symbols_tool.inputSchema.get("properties", {}).get("language", {})
+        enum_values = lang_param.get("enum", [])
+
+        for lang in LANGUAGE_REGISTRY.keys():
+            assert lang in enum_values, f"{lang} missing from enum"
+    finally:
+        config_module._GLOBAL_CONFIG.clear()
+        config_module._GLOBAL_CONFIG.update(orig_config)
+
+
+
     """Should remove disabled tools from list_tools output."""
     from jcodemunch_mcp import config as config_module
 

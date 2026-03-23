@@ -139,6 +139,15 @@ def _coerce_arguments(arguments: dict, schema: dict) -> dict:
 _TOOL_SCHEMAS: dict[str, dict] | None = None
 
 
+def _build_language_enum() -> list[str]:
+    """Build language enum from config, falling back to all registry languages."""
+    languages = config_module.get("languages")
+    if languages is None:
+        from .parser.languages import LANGUAGE_REGISTRY
+        return sorted(LANGUAGE_REGISTRY.keys())
+    return languages
+
+
 async def _ensure_tool_schemas() -> dict[str, dict]:
     """Lazy-initialize the tool name → inputSchema lookup for type coercion.
 
@@ -409,7 +418,7 @@ async def list_tools() -> list[Tool]:
                     "language": {
                         "type": "string",
                         "description": "Optional filter by language",
-                        "enum": ["python", "javascript", "typescript", "tsx", "go", "rust", "java", "php", "dart", "csharp", "razor", "c", "cpp", "swift", "elixir", "ruby", "perl", "gdscript", "blade", "kotlin", "scala", "haskell", "julia", "r", "lua", "bash", "css", "sql", "toml", "erlang", "fortran", "gleam", "nix", "vue", "ejs", "verse", "groovy", "objc", "proto", "hcl", "graphql", "autohotkey", "asm", "xml", "openapi", "al"]
+                        "enum": _build_language_enum()
                     },
                     "max_results": {
                         "type": "integer",
