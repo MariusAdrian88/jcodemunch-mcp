@@ -74,6 +74,8 @@ Always use jCodemunch-MCP tools — never fall back to Read, Grep, Glob, or Bash
 
 You can also add the same block to a project-level `CLAUDE.md` in your repo root.
 
+> **Note:** For a comprehensive guide on enforcing these rules through agent hooks and prompt policies, see [AGENT_HOOKS.md](AGENT_HOOKS.md).
+
 ---
 
 ## First use
@@ -100,6 +102,8 @@ You can also add the same block to a project-level `CLAUDE.md` in your repo root
 | Full-text search | `search_text { "repo": "...", "query": "TODO" }` |
 | Find what imports a file | `find_importers { "repo": "...", "file_path": "..." }` |
 | Find all references to a name | `find_references { "repo": "...", "identifier": "..." }` |
+
+> **Full tool reference with parameters:** [USER_GUIDE.md §6](USER_GUIDE.md#6-tool-reference)
 
 ---
 
