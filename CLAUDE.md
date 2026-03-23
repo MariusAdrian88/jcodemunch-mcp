@@ -1,7 +1,7 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.10.13 (published to PyPI)
+- **Version:** 1.10.17 (published to PyPI)
 - **INDEX_VERSION:** 4
 - **Tests:** 885 passed, 7 skipped
 - **Python:** >=3.10
@@ -48,6 +48,7 @@ src/jcodemunch_mcp/
 | `watch <paths>` | File watcher — auto-reindex on change |
 | `watch-claude` | Auto-discover and watch Claude Code worktrees |
 | `hook-event create\|remove` | Record a worktree lifecycle event (called by Claude Code hooks) |
+| `index-file <path>` | Re-index a single file within an existing indexed folder (used by PostToolUse hooks) |
 | `config` | Print effective configuration grouped by concern |
 | `config --check` | Also validate prerequisites (storage writable, AI pkg installed, HTTP pkgs present) |
 
@@ -190,6 +191,8 @@ Custom parsers (tree-sitter grammar lacks clean named fields):
 | 1.10.11 | UX: `jcodemunch-mcp config` subcommand — prints effective configuration grouped by concern; `--check` validates storage path, AI provider package, and HTTP transport packages |
 | 1.10.12 | UX: `get_repo_outline` now includes `most_imported_files` (top 10 by import in-degree, requires import graph); `get_symbol_diff` MCP description now includes step-by-step branch diff workflow |
 | 1.10.13 | Perf: remove 4-model cost table from per-tool _meta (cost_avoided now returns {}); trim 6 verbose tool descriptions — reduces schema tokens ~249/turn and _meta overhead ~71 tokens/call (×9 tools, compounding) |
+| 1.10.16 | Docs: expand tool reference in USER_GUIDE.md, QUICKSTART.md, and README.md with new tools; add AGENT_HOOKS.md cross-links (PR #155 by gokhanozdemir) |
+| 1.10.17 | CLI: `index-file <path>` subcommand — re-index a single file from the shell; enables PostToolUse hooks for automatic index freshness after agent edits (PR #156 by gokhanozdemir) |
 
 ## Maintenance Practices
 

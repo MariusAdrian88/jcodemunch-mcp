@@ -1721,6 +1721,22 @@ def main(argv: Optional[list[str]] = None):
         help="Also verify prerequisites (storage writable, AI packages installed, HTTP packages present)",
     )
 
+    # --- index-file ---
+    index_file_parser = subparsers.add_parser(
+        "index-file",
+        help="Re-index a single file within an existing indexed folder",
+    )
+    index_file_parser.add_argument(
+        "path",
+        help="Absolute path to the file to index",
+    )
+    index_file_parser.add_argument(
+        "--no-ai-summaries",
+        action="store_true",
+        help="Disable AI-generated summaries for this file",
+    )
+    _add_common_args(index_file_parser)
+
     # --- hook-event ---
     hook_parser = subparsers.add_parser(
         "hook-event",
@@ -1780,7 +1796,7 @@ def main(argv: Optional[list[str]] = None):
     if any(arg in top_level_flags for arg in raw_argv):
         args = parser.parse_args(raw_argv)
     else:
-        known_commands = {"serve", "watch", "hook-event", "watch-claude", "config"}
+        known_commands = {"serve", "watch", "hook-event", "watch-claude", "config", "index-file"}
         has_subcommand = any(arg in known_commands for arg in raw_argv if not arg.startswith("-"))
         if not has_subcommand:
             raw_argv = ["serve"] + list(raw_argv)
@@ -1826,6 +1842,19 @@ def main(argv: Optional[list[str]] = None):
                 follow_symlinks=args.follow_symlinks,
             )
         )
+    elif args.command == "index-file":
+        from .tools.index_file import index_file as _index_file
+        import json as _json
+
+        use_ai = not args.no_ai_summaries and _default_use_ai_summaries()
+        result = _index_file(
+            path=args.path,
+            use_ai_summaries=use_ai,
+            storage_path=os.environ.get("CODE_INDEX_PATH"),
+        )
+        print(_json.dumps(result, indent=2))
+        if not result.get("success"):
+            sys.exit(1)
     else:
         # serve (default)
         from .reindex_state import set_freshness_mode
