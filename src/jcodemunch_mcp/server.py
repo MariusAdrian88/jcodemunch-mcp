@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import functools
+import hmac
 import json
 import jsonschema
 import logging
@@ -997,8 +998,9 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     except KeyError as e:
         return [TextContent(type="text", text=json.dumps({"error": f"Missing required argument: {e}. Check the tool schema for correct parameter names."}, indent=2))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}, indent=2))]
+    except Exception:
+        logger.error("call_tool %s failed", name, exc_info=True)
+        return [TextContent(type="text", text=json.dumps({"error": f"Internal error processing {name}"}, indent=2))]
 
 
 async def _run_server_with_watcher(
@@ -1103,7 +1105,7 @@ def _make_auth_middleware():
     class BearerAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
             auth = request.headers.get("authorization", "")
-            if auth != f"Bearer {token}":
+            if not hmac.compare_digest(auth, f"Bearer {token}"):
                 return JSONResponse(
                     {"error": "Unauthorized. Set Authorization: Bearer <JCODEMUNCH_HTTP_TOKEN> header."},
                     status_code=401,

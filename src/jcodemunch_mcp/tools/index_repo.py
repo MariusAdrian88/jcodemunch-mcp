@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import time
 from typing import Optional
 from urllib.parse import urlparse
@@ -24,9 +25,13 @@ from ._indexing_pipeline import (
 )
 
 
+_SLUG_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+_ALLOWED_GITHUB_HOSTS = {"github.com"}
+
+
 def parse_github_url(url: str) -> tuple[str, str]:
     """Extract owner/repo from GitHub URL or owner/repo string.
-    
+
     Supports:
     - https://github.com/owner/repo
     - https://github.com/owner/repo.git
@@ -34,21 +39,32 @@ def parse_github_url(url: str) -> tuple[str, str]:
     """
     # Remove .git suffix
     url = url.removesuffix(".git")
-    
+
     # If it contains a / but not ://, treat as owner/repo
     if "/" in url and "://" not in url:
         parts = url.split("/")
-        return parts[0], parts[1]
-    
-    # Parse URL
+        owner, repo = parts[0], parts[1]
+        if not _SLUG_RE.match(owner) or not _SLUG_RE.match(repo):
+            raise ValueError(f"Invalid owner/repo format: {url!r}")
+        return owner, repo
+
+    # Parse URL — validate hostname before making any network calls
     parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if host not in _ALLOWED_GITHUB_HOSTS:
+        raise ValueError(
+            f"Unsupported host {host!r}. Only github.com URLs are accepted."
+        )
     path = parsed.path.strip("/")
-    
+
     # Extract owner/repo from path
     parts = path.split("/")
     if len(parts) >= 2:
-        return parts[0], parts[1]
-    
+        owner, repo = parts[0], parts[1]
+        if not _SLUG_RE.match(owner) or not _SLUG_RE.match(repo):
+            raise ValueError(f"Invalid owner/repo in URL: {url!r}")
+        return owner, repo
+
     raise ValueError(f"Could not parse GitHub URL: {url}")
 
 

@@ -206,6 +206,10 @@ def search_symbols(
     if detail_level not in ("compact", "standard", "full"):
         return {"error": f"Invalid detail_level '{detail_level}'. Must be 'compact', 'standard', or 'full'."}
 
+    _MAX_QUERY_LEN = 500
+    if len(query) > _MAX_QUERY_LEN:
+        return {"error": f"Query too long ({len(query)} chars, max {_MAX_QUERY_LEN})"}
+
     start = time.perf_counter()
     max_results = max(1, min(max_results, 100))
 

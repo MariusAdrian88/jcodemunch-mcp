@@ -46,6 +46,10 @@ def search_text(
     Returns:
         Dict with matching lines grouped by file, plus _meta envelope.
     """
+    _MAX_QUERY_LEN = 500
+    if len(query) > _MAX_QUERY_LEN:
+        return {"error": f"Query too long ({len(query)} chars, max {_MAX_QUERY_LEN})"}
+
     start = time.perf_counter()
     max_results = max(1, min(max_results, 100))
     context_lines = max(0, min(context_lines, 10))
