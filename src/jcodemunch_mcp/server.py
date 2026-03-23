@@ -155,10 +155,18 @@ async def _ensure_tool_schemas() -> dict[str, dict]:
 server = Server("jcodemunch-mcp")
 
 
+_SUPPRESS_META_PROP = {
+    "suppress_meta": {
+        "type": "boolean",
+        "description": "When true, omit the _meta envelope from the response (saves ~100-200 tokens per call)."
+    }
+}
+
+
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     """List all available tools."""
-    return [
+    tools = [
         Tool(
             name="index_repo",
             description="Index a GitHub repository's source code. Fetches files, parses ASTs, extracts symbols, and saves to local storage. Set JCODEMUNCH_USE_AI_SUMMARIES=false to disable AI summaries globally.",
@@ -732,6 +740,11 @@ async def list_tools() -> list[Tool]:
             }
         ),
     ]
+    # Inject suppress_meta into every tool's properties without touching each schema individually.
+    for tool in tools:
+        if isinstance(tool.inputSchema, dict):
+            tool.inputSchema.setdefault("properties", {}).update(_SUPPRESS_META_PROP)
+    return tools
 
 
 @server.list_resources()
@@ -1038,21 +1051,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             result = {"error": f"Unknown tool: {name}"}
         
         if isinstance(result, dict):
-            _meta = result.setdefault("_meta", {})
-            _meta["powered_by"] = "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp"
-            # Inject staleness fields for per-repo tools
-            repo_arg = arguments.get("repo")
-            if repo_arg:
-                # get_reindex_status returns spec fields: index_stale, reindex_in_progress,
-                # stale_since_ms, and conditionally reindex_error / reindex_failures.
-                _meta.update(get_reindex_status(repo_arg))
-            elif name not in ("list_repos", "get_session_stats", "index_repo", "index_folder"):
-                # For non-repo tools, report global reindex activity
-                from .reindex_state import is_any_reindex_in_progress
-                any_in_progress = is_any_reindex_in_progress()
-                _meta["index_stale"] = any_in_progress
-                _meta["reindex_in_progress"] = any_in_progress
-                _meta["stale_since_ms"] = None
+            if arguments.get("suppress_meta"):
+                result.pop("_meta", None)
+            else:
+                _meta = result.setdefault("_meta", {})
+                _meta["powered_by"] = "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp"
+                # Inject staleness fields for per-repo tools
+                repo_arg = arguments.get("repo")
+                if repo_arg:
+                    # get_reindex_status returns spec fields: index_stale, reindex_in_progress,
+                    # stale_since_ms, and conditionally reindex_error / reindex_failures.
+                    _meta.update(get_reindex_status(repo_arg))
+                elif name not in ("list_repos", "get_session_stats", "index_repo", "index_folder"):
+                    # For non-repo tools, report global reindex activity
+                    from .reindex_state import is_any_reindex_in_progress
+                    any_in_progress = is_any_reindex_in_progress()
+                    _meta["index_stale"] = any_in_progress
+                    _meta["reindex_in_progress"] = any_in_progress
+                    _meta["stale_since_ms"] = None
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     except KeyError as e:

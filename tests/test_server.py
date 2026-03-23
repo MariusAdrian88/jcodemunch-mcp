@@ -381,3 +381,31 @@ async def test_call_tool_uses_our_schema_cache_not_sdk():
 
     mock_ensure.assert_called_once()
 
+
+
+@pytest.mark.asyncio
+async def test_suppress_meta_removes_meta_envelope():
+    """suppress_meta=True strips the _meta key from the response."""
+    with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": []}):
+        result = await call_tool("list_repos", {"suppress_meta": True})
+    payload = json.loads(result[0].text)
+    assert "_meta" not in payload
+
+
+@pytest.mark.asyncio
+async def test_suppress_meta_false_keeps_meta_envelope():
+    """suppress_meta=False (or absent) keeps the _meta envelope."""
+    with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": []}):
+        result = await call_tool("list_repos", {})
+    payload = json.loads(result[0].text)
+    assert "_meta" in payload
+
+
+@pytest.mark.asyncio
+async def test_list_tools_all_have_suppress_meta():
+    """Every tool schema exposes suppress_meta as an optional boolean property."""
+    tools = await list_tools()
+    for tool in tools:
+        props = (tool.inputSchema or {}).get("properties", {})
+        assert "suppress_meta" in props, f"{tool.name} missing suppress_meta"
+        assert props["suppress_meta"]["type"] == "boolean"
