@@ -196,6 +196,15 @@ With optional GitHub auth and AI summaries:
 * `JCODEMUNCH_CONTEXT_PROVIDERS=0`
   Disables context-provider enrichment during indexing.
 
+* `JCODEMUNCH_EMBED_MODEL`
+  Activates local embedding via `sentence-transformers`. Set to a model name such as `all-MiniLM-L6-v2`. Install the optional dep with `pip install jcodemunch-mcp[semantic]`.
+
+* `OPENAI_EMBED_MODEL`
+  Activates OpenAI embedding (requires `OPENAI_API_KEY` also set). Example: `text-embedding-3-small`.
+
+* `GOOGLE_EMBED_MODEL`
+  Activates Gemini embedding (requires `GOOGLE_API_KEY` also set). Example: `models/text-embedding-004`.
+
 Restart Claude Desktop after saving.
 
 ### Debug logging
@@ -496,9 +505,11 @@ These IDs stay stable across re-indexing as long as path, qualified name, and ki
 | `index_repo` | Index a GitHub repository | `url`, `incremental`, `use_ai_summaries`, `extra_ignore_patterns` |
 | `index_folder` | Index a local folder | `path`, `incremental`, `use_ai_summaries`, `extra_ignore_patterns`, `follow_symlinks` |
 | `index_file` | Re-index one file — faster than `index_folder` for surgical updates | `path`, `use_ai_summaries`, `context_providers` |
+| `embed_repo` | Precompute and cache all symbol embeddings for semantic search in one pass (optional warm-up; embeddings are also computed lazily on first semantic query) | `repo`, `batch_size`, `force` |
 | `list_repos` | List all indexed repositories | — |
 | `resolve_repo` | Resolve a filesystem path to its repo ID — O(1) lookup, preferred over `list_repos` when you know the path | `path` |
 | `invalidate_cache` | Delete cached index and force a full re-index | `repo` |
+| `check_freshness` | Compare the git SHA recorded at index time against current HEAD; returns `fresh`, `indexed_sha`, `current_sha`, and `commits_behind` | `repo` |
 | `wait_for_fresh` | Wait for in-progress watcher reindex to finish before proceeding | `repo`, `timeout_ms` |
 
 ### Discovery & Outlines
@@ -515,26 +526,30 @@ These IDs stay stable across re-indexing as long as path, qualified name, and ki
 | Tool | What it does | Key parameters |
 |------|--------------|----------------|
 | `get_symbol_source` | Retrieve symbol source: `symbol_id` (single, flat response) or `symbol_ids[]` (batch, `{symbols,errors}`); supports verify and context_lines | `repo`, `symbol_id`, `symbol_ids`, `verify`, `context_lines` |
-| `get_context_bundle` | Symbol + its imports + optional callers in one bundle; supports multi-symbol and Markdown output | `repo`, `symbol_id`, `symbol_ids`, `include_callers`, `output_format` |
+| `get_context_bundle` | Symbol + its imports + optional callers in one bundle; supports multi-symbol, Markdown output, and token budgeting (`token_budget`, `budget_strategy`: `most_relevant`/`core_first`/`compact`, `include_budget_report`) | `repo`, `symbol_id`, `symbol_ids`, `include_callers`, `output_format`, `token_budget`, `budget_strategy`, `include_budget_report` |
+| `get_ranked_context` | Query-driven token-budgeted context assembler — returns the best-fit symbols for a task, ranked by relevance + centrality and greedily packed to fit the budget | `repo`, `query`, `token_budget`, `strategy`, `include_kinds`, `scope` |
 | `get_file_content` | Read cached file content, optionally sliced to a line range | `repo`, `file_path`, `start_line`, `end_line` |
 
 ### Search
 
 | Tool | What it does | Key parameters |
 |------|--------------|----------------|
-| `search_symbols` | Search symbol index by name, signature, summary, or docstring; supports `kind`, `language`, `file_pattern`, token budget, and compact/full detail levels | `repo`, `query`, `kind`, `language`, `file_pattern`, `max_results`, `token_budget`, `detail_level` |
-| `search_text` | Full-text search across indexed file contents; supports regex and context lines | `repo`, `query`, `is_regex`, `file_pattern`, `max_results`, `context_lines` |
+| `search_symbols` | Search symbol index by name, signature, summary, or docstring; supports kind/language/file_pattern filters, fuzzy matching (`fuzzy`, `fuzzy_threshold`, `max_edit_distance`), centrality-aware ranking (`sort_by`: `relevance`/`centrality`/`combined`), and optional semantic/hybrid search (`semantic`, `semantic_weight`, `semantic_only`) | `repo`, `query`, `kind`, `language`, `file_pattern`, `max_results`, `token_budget`, `detail_level`, `fuzzy`, `sort_by`, `semantic` |
+| `search_text` | Full-text search across indexed file contents; supports regex, context lines, and optional semantic search | `repo`, `query`, `is_regex`, `file_pattern`, `max_results`, `context_lines`, `semantic` |
 | `search_columns` | Search column metadata across dbt / SQLMesh / database catalog models | `repo`, `query`, `model_pattern`, `max_results` |
 
 ### Relationship & Impact Analysis
 
 | Tool | What it does | Key parameters |
 |------|--------------|----------------|
-| `find_importers` | Find all files that import a given file; supports batch via `file_paths` | `repo`, `file_path`, `file_paths`, `max_results` |
+| `find_importers` | Find all files that import a given file; supports batch via `file_paths`; each result includes `has_importers` flag for spotting transitive dead-code chains | `repo`, `file_path`, `file_paths`, `max_results` |
 | `find_references` | Find all files that import or reference a given identifier; supports batch via `identifiers` | `repo`, `identifier`, `identifiers`, `max_results` |
 | `check_references` | Quick dead-code check: is an identifier referenced anywhere? Combines import + content search | `repo`, `identifier`, `identifiers`, `search_content`, `max_content_results` |
 | `get_dependency_graph` | File-level dependency graph up to 3 hops; direction = imports, importers, or both | `repo`, `file`, `direction`, `depth` |
-| `get_blast_radius` | Which files break if this symbol changes? Returns confirmed and potential impacted files | `repo`, `symbol`, `depth` |
+| `get_blast_radius` | Which files break if this symbol changes? Returns confirmed/potential impacted files, `overall_risk_score`, `direct_dependents_count`; set `include_depth_scores=true` for `impact_by_depth` grouped by BFS layer | `repo`, `symbol`, `depth`, `include_depth_scores` |
+| `get_symbol_importance` | Rank symbols by architectural centrality using PageRank or in-degree on the import graph; surfaces the most load-bearing symbols in a repo | `repo`, `top_n`, `algorithm`, `scope` |
+| `find_dead_code` | Find symbols and files unreachable from any entry point via the import graph; entry points auto-detected (main, __init__, CLI decorators, etc.) | `repo`, `granularity`, `min_confidence`, `include_tests`, `entry_point_patterns` |
+| `get_changed_symbols` | Map a git diff to affected symbols; detects added/modified/removed/renamed symbols between two commits; optionally includes blast radius per changed symbol | `repo`, `since_sha`, `until_sha`, `include_blast_radius`, `max_blast_depth` |
 | `get_class_hierarchy` | Full inheritance chain (ancestors + descendants) across Python, TS, Java, C#, and more | `repo`, `class_name` |
 | `get_related_symbols` | Symbols related to a given symbol via co-location, shared importers, and name-token overlap | `repo`, `symbol_id`, `max_results` |
 | `get_symbol_diff` | Diff symbol sets of two indexed repo snapshots; detects added, removed, and changed symbols | `repo_a`, `repo_b` |
@@ -556,6 +571,18 @@ New / unfamiliar repo?
 Looking for a symbol by name?
   → search_symbols  (add kind= / language= / file_pattern= to narrow)
 
+Typo or partial name? (fuzzy)
+  → search_symbols(fuzzy=true)
+
+Concept search — "database connection" when the code says "db_pool"?
+  → search_symbols(semantic=true)  (requires embedding provider)
+
+What are the most architecturally important symbols?
+  → get_symbol_importance  (PageRank on the import graph)
+
+Get the best-fit context for a task without blowing the token budget?
+  → get_ranked_context(query="...", token_budget=4000)
+
 Looking for text, strings, or comments?
   → search_text  (supports regex and context_lines)
 
@@ -563,7 +590,7 @@ Need to read a function or class?
   → get_file_outline → get_symbol_source
 
 Need symbol + its imports in one shot?
-  → get_context_bundle
+  → get_context_bundle  (add token_budget= to cap size)
 
 What imports this file?
   → find_importers
@@ -572,7 +599,16 @@ Where is this identifier used?
   → find_references  (or check_references for a quick yes/no)
 
 What breaks if I change this symbol?
-  → get_blast_radius → find_importers
+  → get_blast_radius(include_depth_scores=true) → find_importers
+
+What symbols actually changed since the last commit?
+  → get_changed_symbols  (add include_blast_radius=true for downstream impact)
+
+Is this code dead / unreachable?
+  → find_dead_code  (or check_references for a single identifier)
+
+Is the index fresh?
+  → check_freshness
 
 Class hierarchy?
   → get_class_hierarchy
@@ -604,11 +640,19 @@ The search logic uses weighted scoring across things like:
 
 Filters like `kind`, `language`, and `file_pattern` narrow the field before scoring. Zero-score results are discarded. ([GitHub][3])
 
+**Fuzzy matching** — pass `fuzzy=true` to enable a trigram Jaccard + Levenshtein fallback that fires when BM25 confidence is low. Useful for typos or partial names (`conn` → `connection_pool`). Fuzzy results include `match_type`, `fuzzy_similarity`, and `edit_distance` fields. Zero behavioral change when `fuzzy=false` (default).
+
+**Centrality-aware ranking** — pass `sort_by="centrality"` to rank results by PageRank on the import graph, or `sort_by="combined"` to blend BM25 and PageRank. Default stays `"relevance"` (pure BM25).
+
+**Semantic / hybrid search** — pass `semantic=true` to enable embedding-based search alongside BM25. Requires a configured embedding provider (`JCODEMUNCH_EMBED_MODEL`, `OPENAI_API_KEY + OPENAI_EMBED_MODEL`, or `GOOGLE_API_KEY + GOOGLE_EMBED_MODEL`). `semantic_weight` controls the BM25/embedding blend (default 0.5). `semantic_only=true` skips BM25 entirely. Zero performance impact when `semantic=false` (default).
+
 Practical takeaway:
 
 * use a precise query when you know the symbol name
 * add `kind` when you know whether you want a function, class, method, etc.
 * use `file_pattern` or `language` when a repo is large or polyglot
+* use `fuzzy=true` for typos, partials, or snake_case mismatches
+* use `semantic=true` for concept-level queries when you don't know the exact symbol name
 
 ---
 

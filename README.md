@@ -91,7 +91,7 @@ That means:
 
 It indexes your codebase once using tree-sitter, stores structured symbol metadata plus byte offsets into the original source, and retrieves exact implementations on demand instead of re-reading entire files over and over.
 
-Recent releases have also made that retrieval workflow sharper and more useful in real engineering work, with BM25-based symbol search, context bundles, compact search modes, query suggestions for unfamiliar repos, dependency graphs, class hierarchy traversal, blast-radius analysis, multi-symbol bundles, live watch-based reindexing, automatic Claude Code worktree discovery (`watch-claude`), and benchmark reproducibility improvements.
+Recent releases have made that retrieval workflow sharper and more useful in real engineering work, with BM25-based symbol search, fuzzy matching, semantic/hybrid search (opt-in, zero mandatory dependencies), query-driven token-budgeted context assembly (`get_ranked_context`), dead code detection (`find_dead_code`), git-diff-to-symbol mapping (`get_changed_symbols`), architectural centrality ranking (`get_symbol_importance`, PageRank), index freshness checking (`check_freshness`), blast-radius depth scoring, context bundles with token budgets, dependency graphs, class hierarchy traversal, multi-symbol bundles, live watch-based reindexing, automatic Claude Code worktree discovery (`watch-claude`), and trusted-folder access controls.
 
 ---
 
@@ -138,11 +138,12 @@ Most agents still inspect codebases like tourists trapped in an airport gift sho
 
 jCodeMunch fixes that by giving them a structured way to:
 
-* search symbols by name, kind, or language
+* search symbols by name, kind, or language — with fuzzy matching and optional semantic/hybrid search
 * inspect file and repo outlines before pulling source
 * retrieve exact symbol implementations only
-* grab a context bundle when surrounding imports matter
+* grab a token-budgeted context bundle or ranked context pack for a task
 * fall back to text search when structure alone is not enough
+* detect dead code, trace impact, rank by centrality, and map git diffs to symbols
 
 Agents do not need bigger and bigger context windows.
 
@@ -166,7 +167,7 @@ Send the model the code it needs, not 1,500 lines of collateral damage.
 
 ### Structural queries native tools can't answer
 
-`find_importers` tells you what imports a file. `get_blast_radius` tells you what breaks if you change a symbol. `get_class_hierarchy` traverses inheritance chains. These are not "faster grep" — they are questions grep cannot answer at all.
+`find_importers` tells you what imports a file. `get_blast_radius` tells you what breaks if you change a symbol, with depth-weighted risk scores. `get_class_hierarchy` traverses inheritance chains. `find_dead_code` finds symbols and files unreachable from any entry point. `get_changed_symbols` maps a git diff to the exact symbols that were added, modified, or removed. `get_symbol_importance` ranks your codebase by architectural centrality using PageRank on the import graph. These are not "faster grep" — they are questions grep cannot answer at all.
 
 ### Better engineering workflows
 

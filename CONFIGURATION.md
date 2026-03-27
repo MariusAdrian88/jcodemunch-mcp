@@ -208,6 +208,20 @@ The legacy `suppress_meta` per-call parameter still works for backward compatibi
 | `stats_file_interval` | int | `3` | Calls between `session_stats.json` writes. `0` = disable (reduces NVMe writes). |
 | `share_savings` | bool | `true` | Send anonymous token savings telemetry to the community counter. |
 
+### Semantic search
+
+Semantic/embedding search is opt-in and requires no config file changes — it is activated entirely through environment variables. All embedding provider vars remain env-var-only (see [Not in config](#not-in-config) below).
+
+**Provider priority** (first match wins):
+
+1. Local `sentence-transformers` — set `JCODEMUNCH_EMBED_MODEL=all-MiniLM-L6-v2`. Install: `pip install jcodemunch-mcp[semantic]`. Free, ~25MB, CPU-only.
+2. OpenAI — set `OPENAI_API_KEY` **and** `OPENAI_EMBED_MODEL` (e.g. `text-embedding-3-small`). Per-token cost.
+3. Gemini — set `GOOGLE_API_KEY` **and** `GOOGLE_EMBED_MODEL` (e.g. `models/text-embedding-004`). Per-token cost.
+
+When no provider is configured, `search_symbols(semantic=true)` returns a structured error (`error: "no_embedding_provider"`) rather than crashing.
+
+Embeddings are stored in the per-repo SQLite database (`symbol_embeddings` table). They persist across restarts and are invalidated only for changed symbols on incremental reindex.
+
 ### Path remapping
 
 | Key | Type | Default | Description |
@@ -293,3 +307,6 @@ These environment variables are **not** config keys and remain env-var only:
 | `GITHUB_TOKEN` | Secret |
 | `ANTHROPIC_MODEL` / `GOOGLE_MODEL` / `OPENAI_MODEL` | AI model selection — rarely changed, provider-specific |
 | `OPENAI_TIMEOUT` / `OPENAI_BATCH_SIZE` / `OPENAI_MAX_TOKENS` / `OPENAI_CONCURRENCY` | Local LLM tuning — see [USER_GUIDE.md](USER_GUIDE.md#11-local-llm-tuning-for-summaries) |
+| `JCODEMUNCH_EMBED_MODEL` | Semantic search — selects local `sentence-transformers` model (e.g. `all-MiniLM-L6-v2`). Install dep: `pip install jcodemunch-mcp[semantic]` |
+| `OPENAI_EMBED_MODEL` | Semantic search — activates OpenAI embedding provider (requires `OPENAI_API_KEY`). Example: `text-embedding-3-small` |
+| `GOOGLE_EMBED_MODEL` | Semantic search — activates Gemini embedding provider (requires `GOOGLE_API_KEY`). Example: `models/text-embedding-004` |

@@ -142,6 +142,47 @@ Re-indexes a single file without touching the rest of the index. Locates the own
 
 ---
 
+#### `embed_repo` — Precompute symbol embeddings for semantic search
+
+```json
+{
+  "repo": "owner/repo",
+  "batch_size": 50,
+  "force": false
+}
+```
+
+Precomputes and caches all symbol embeddings in one pass. This is an optional warm-up step; `search_symbols(semantic=true)` also computes embeddings lazily on first use.
+
+**Behavioral notes:**
+
+* embeddings are stored in a `symbol_embeddings` SQLite table in the per-repo `.db` file
+* serialized as float32 BLOBs via stdlib `array` module; no numpy required
+* `force=true` recomputes even when cached embeddings exist
+* requires an embedding provider (`JCODEMUNCH_EMBED_MODEL`, `OPENAI_API_KEY + OPENAI_EMBED_MODEL`, or `GOOGLE_API_KEY + GOOGLE_EMBED_MODEL`)
+
+---
+
+#### `check_freshness` — Compare index SHA against current git HEAD
+
+```json
+{
+  "repo": "owner/repo"
+}
+```
+
+Compares the git HEAD SHA recorded at index time against the current HEAD for locally indexed repos.
+
+**Return fields:** `fresh` (bool), `indexed_sha`, `current_sha`, `commits_behind`.
+
+**Behavioral notes:**
+
+* only meaningful for repos indexed via `index_folder` with a local git repository present
+* GitHub-indexed repos return `is_local: false` with an explanatory message
+* `is_stale` is also included in `_meta` on `get_repo_outline` responses
+
+---
+
 #### `invalidate_cache` — Delete index for a repository
 
 ```json
@@ -255,12 +296,14 @@ Returns raw cached file content from the local store.
 }
 ```
 
-Returns repository-level summary information such as file counts by directory, language breakdown, and symbol-kind distribution.
+Returns repository-level summary information such as file counts by directory, language breakdown, symbol-kind distribution, most-imported files, and most central symbols by PageRank.
 
 **Behavioral notes:**
 
 * lighter than `get_file_tree`
 * intended as a coarse-grained entry point for unfamiliar repositories
+* includes `most_central_symbols` (top 10 by PageRank score) alongside the existing `most_imported_files`
+* `_meta.is_stale` reflects whether the git HEAD has moved since index time
 
 ---
 
@@ -320,7 +363,10 @@ Batch — returns `{symbols, errors}`:
 ```json
 {
   "repo": "owner/repo",
-  "symbol_id": "src/auth.py::AuthService.login#method"
+  "symbol_id": "src/auth.py::AuthService.login#method",
+  "token_budget": 4000,
+  "budget_strategy": "most_relevant",
+  "include_budget_report": false
 }
 ```
 
@@ -328,9 +374,34 @@ Returns a bounded retrieval package designed to support downstream reasoning tas
 
 **Behavioral notes:**
 
-* may include the target symbol, related imports, neighboring items, or related symbols
-* later variants may support multi-symbol bundles, deduplicated imports, optional callers, and alternative output formatting
-* intended to reduce tool-call thrash while preserving bounded context
+* includes the target symbol, related imports, deduplicated dependencies, and optional callers
+* supports multi-symbol bundles via `symbol_ids[]`
+* `token_budget` (int) — when set, symbols are ranked and trimmed to fit; fully backward-compatible (omit to get existing behavior)
+* `budget_strategy`: `"most_relevant"` (default, ranks by import in-degree), `"core_first"` (primary symbol first, imports ranked by centrality), `"compact"` (signatures only, no bodies)
+* `include_budget_report=true` adds a `budget_report` field with `budget_tokens`, `used_tokens`, `included_symbols`, `excluded_symbols`, and `strategy`
+
+---
+
+#### `get_ranked_context` — Query-driven token-budgeted context assembler
+
+```json
+{
+  "repo": "owner/repo",
+  "query": "authentication flow",
+  "token_budget": 4000,
+  "strategy": "combined"
+}
+```
+
+Returns the best-fit symbols for a task description, ranked by relevance and centrality, greedily packed to fit within the token budget.
+
+**Behavioral notes:**
+
+* `strategy`: `"combined"` (BM25 + PageRank weighted sum, default), `"bm25"` (pure text relevance), `"centrality"` (PageRank only)
+* `include_kinds` (list) — restrict candidates to specific symbol kinds
+* `scope` (string) — restrict candidates to a subdirectory
+* per-item response includes `relevance_score`, `centrality_score`, `combined_score`, `tokens`, and `source`
+* token counting uses `len(text) // 4` heuristic; upgrades to `tiktoken` if installed (no hard dep)
 
 ---
 
@@ -345,7 +416,10 @@ Returns a bounded retrieval package designed to support downstream reasoning tas
   "kind": "function",
   "language": "python",
   "file_pattern": "src/**/*.py",
-  "max_results": 10
+  "max_results": 10,
+  "fuzzy": false,
+  "sort_by": "relevance",
+  "semantic": false
 }
 ```
 
@@ -356,6 +430,9 @@ Searches the symbol index using a structured ranking pipeline.
 * all filters are optional
 * supports narrowing by symbol kind, language, and file path pattern
 * ranking uses multiple lexical and metadata signals rather than a single naive match rule
+* **fuzzy matching** — `fuzzy=true` enables a trigram Jaccard + Levenshtein fallback when BM25 confidence is low (`top score < 0.1`) or when explicitly requested. Fuzzy results carry `match_type="fuzzy"`, `fuzzy_similarity`, and `edit_distance` fields. Zero behavioral change when `fuzzy=false` (default).
+* **centrality-aware ranking** — `sort_by`: `"relevance"` (default, BM25), `"centrality"` (filter by query match, rank by PageRank), `"combined"` (BM25 + PageRank weighted sum)
+* **semantic search** — `semantic=true` enables hybrid BM25 + embedding ranking. Requires an embedding provider. `semantic_weight` (float, default 0.5) controls the blend. `semantic_only=true` skips BM25 entirely. `semantic=false` (default) has zero performance impact and zero new imports. `semantic=true` with no provider configured returns a structured error (`error: "no_embedding_provider"`).
 * intended as the primary entry point for locating code by meaningfully named program elements
 
 ---
@@ -379,6 +456,7 @@ Performs case-insensitive text search across indexed file contents.
 * intended for comments, strings, configuration values, TODO markers, or other non-symbol content
 * returns grouped matches in a file-oriented structure
 * can include surrounding lines through `context_lines`
+* supports `semantic=true` for embedding-based search (same provider requirements as `search_symbols`)
 
 Representative result shape:
 
@@ -454,7 +532,8 @@ Returns class hierarchy information above and below the target symbol, including
 ```json
 {
   "repo": "owner/repo",
-  "symbol_id": "src/core.py::process_order#function"
+  "symbol_id": "src/core.py::process_order#function",
+  "include_depth_scores": false
 }
 ```
 
@@ -462,8 +541,79 @@ Estimates likely impact by traversing reverse import relationships and inspectin
 
 **Behavioral notes:**
 
-* may distinguish confirmed from potential impact where enough evidence exists
+* distinguishes confirmed from potential impact where enough evidence exists
+* always returns `overall_risk_score` (0.0–1.0, weighted by hop distance: `1/depth^0.7`) and `direct_dependents_count`
+* `include_depth_scores=true` adds `impact_by_depth` — confirmed files grouped by BFS layer, each with a `risk_score`
+* flat `confirmed`/`potential` lists are preserved unchanged (backward compatible)
 * intended for change-planning and refactoring workflows
+
+---
+
+#### `get_symbol_importance` — Rank symbols by architectural centrality
+
+```json
+{
+  "repo": "owner/repo",
+  "top_n": 20,
+  "algorithm": "pagerank"
+}
+```
+
+Returns the most architecturally important symbols in a repo, ranked by PageRank or in-degree on the import graph.
+
+**Behavioral notes:**
+
+* `algorithm`: `"pagerank"` (damping=0.85, convergence threshold=1e-6, max 100 iterations) or `"degree"` (raw in-degree count, O(1))
+* `scope` (string) — restrict to a subdirectory or file glob
+* response includes `symbol_id`, `rank`, `score`, `in_degree`, `out_degree`, `kind`, and `iterations_to_converge`
+* PageRank scores are cached per `CodeIndex` load and recomputed only on incremental reindex
+
+---
+
+#### `find_dead_code` — Find unreachable symbols and files
+
+```json
+{
+  "repo": "owner/repo",
+  "granularity": "symbol",
+  "min_confidence": 0.8,
+  "include_tests": false
+}
+```
+
+Finds symbols and files unreachable from any entry point via BFS over the import graph.
+
+**Behavioral notes:**
+
+* entry points auto-detected: `main.py`, `__main__.py`, `conftest.py`, `manage.py`, `__init__.py` package roots, `if __name__ == "__main__"` guards (Python), and common framework decorators
+* `granularity`: `"symbol"` (default) or `"file"` (a file is dead only when all its symbols are dead)
+* `min_confidence` (float, default 0.8) — lower values surface more candidates including ambiguous cases
+* `entry_point_patterns` (list) — additional glob patterns to treat as live roots
+* confidence scoring: `1.0` = zero importers, no framework decoration; `0.9` = zero importers in a test file; `0.7` = all importers are themselves dead (cascading)
+
+---
+
+#### `get_changed_symbols` — Map a git diff to affected symbols
+
+```json
+{
+  "repo": "owner/repo",
+  "since_sha": null,
+  "until_sha": "HEAD",
+  "include_blast_radius": false
+}
+```
+
+Maps a git diff to the symbols that were added, modified, removed, or renamed.
+
+**Behavioral notes:**
+
+* `since_sha` defaults to the SHA stored at index time; `until_sha` defaults to `"HEAD"`
+* `change_type` values: `"added"`, `"removed"`, `"modified"`, `"renamed"` (body-hash-identical rename heuristic)
+* `include_blast_radius=true` appends downstream importers per changed symbol (up to `max_blast_depth` hops)
+* requires a locally indexed repo (`index_folder`); GitHub-indexed repos return a structured error
+* requires `git` on PATH; graceful error if not available
+* filters index-storage files from the diff when the storage dir is inside the repo
 
 ---
 
