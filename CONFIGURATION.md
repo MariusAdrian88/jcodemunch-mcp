@@ -171,7 +171,7 @@ Controls the `_meta` envelope included in tool responses. Reducing meta fields s
 }
 ```
 
-Available meta fields: `timing_ms`, `tokens_saved`, `total_tokens_saved`, `powered_by`, `index_stale`, `reindex_in_progress`, `stale_since_ms`, `files_searched`, `truncated`, `candidates_scored`.
+Available meta fields: `timing_ms`, `tokens_saved`, `total_tokens_saved`, `files_searched`, `truncated`, `candidates_scored`.
 
 The legacy `suppress_meta` per-call parameter still works for backward compatibility.
 
@@ -189,8 +189,13 @@ The legacy `suppress_meta` per-call parameter still works for backward compatibi
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `watch` | bool | `false` | Enable built-in file watcher alongside the MCP server. |
-| `watch_debounce_ms` | int | `2000` | Debounce interval for file change events. |
-| `freshness_mode` | str | `"relaxed"` | `"relaxed"` = serve stale results during reindex. `"strict"` = wait for fresh results (500ms timeout). |
+| `watch_debounce_ms` | int | `2000` | Debounce interval for file change events (ms). |
+| `watch_extra_ignore` | list | `[]` | Additional gitignore-style patterns to exclude from watching. |
+| `watch_follow_symlinks` | bool | `false` | Include symlinked files in watcher indexing. |
+| `watch_idle_timeout` | int or null | `null` | Auto-stop watcher after N minutes with no re-indexing. `null` = disabled. |
+| `watch_log` | str or null | `null` | Log watcher output to file. `"auto"` = temp file. `null` = quiet. |
+| `watch_paths` | list | `[]` | Folder(s) to watch. Empty = current working directory. |
+| `freshness_mode` | str | `"relaxed"` | `"relaxed"` = serve immediately. `"strict"` = wait for fresh results (500ms timeout). |
 | `claude_poll_interval` | float | `5.0` | Poll interval (seconds) for Claude Code worktree discovery. |
 
 ### Logging

@@ -802,6 +802,10 @@ class TestIndexVersioning:
         finally:
             conn.close()
 
+        # Evict cache — direct DB edit bypasses save_index's cache update
+        from jcodemunch_mcp.storage.sqlite_store import _cache_evict
+        _cache_evict("ver", "test")
+
         loaded = store.load_index("ver", "test")
         assert loaded is None, "Future version should not be loadable"
 

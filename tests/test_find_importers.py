@@ -594,6 +594,14 @@ class TestFindImporters:
         finally:
             conn.close()
 
+        # Evict the in-memory cache entry: the direct DB modification above
+        # bypasses the normal save_index path that updates the cache.  Without
+        # this, load_index may return the stale cached CodeIndex (WAL mode does
+        # not always update the DB file mtime, so the cache key still matches).
+        from jcodemunch_mcp.storage.sqlite_store import _cache_evict
+        safe_name = store_obj._sqlite._safe_repo_component(name, "name")
+        _cache_evict(owner, safe_name)
+
         importers = find_importers(
             repo=result["repo"],
             file_path="app.js",

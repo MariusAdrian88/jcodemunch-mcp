@@ -509,8 +509,6 @@ These IDs stay stable across re-indexing as long as path, qualified name, and ki
 | `list_repos` | List all indexed repositories | — |
 | `resolve_repo` | Resolve a filesystem path to its repo ID — O(1) lookup, preferred over `list_repos` when you know the path | `path` |
 | `invalidate_cache` | Delete cached index and force a full re-index | `repo` |
-| `check_freshness` | Compare the git SHA recorded at index time against current HEAD; returns `fresh`, `indexed_sha`, `current_sha`, and `commits_behind` | `repo` |
-| `wait_for_fresh` | Wait for in-progress watcher reindex to finish before proceeding | `repo`, `timeout_ms` |
 
 ### Discovery & Outlines
 
@@ -606,9 +604,6 @@ What symbols actually changed since the last commit?
 
 Is this code dead / unreachable?
   → find_dead_code  (or check_references for a single identifier)
-
-Is the index fresh?
-  → check_freshness
 
 Class hierarchy?
   → get_class_hierarchy

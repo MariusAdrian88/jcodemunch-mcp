@@ -59,16 +59,24 @@ class TestServeWatcherCliArgs:
 
     def test_watcher_flag_absent_is_none(self):
         from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
         captured = []
 
         def capturing_run(coro, *a, **kw):
             captured.append(coro)
 
+        # Mock config to ensure watch=False so test is isolated from config file
+        def mock_get(key, default=None):
+            if key == "watch":
+                return False
+            return real_get(key, default)
+
         with patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run):
-            try:
-                main(["serve"])
-            except SystemExit:
-                pass
+            with patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
+                try:
+                    main(["serve"])
+                except SystemExit:
+                    pass
 
         # The coroutine should be run_stdio_server (no wrapper)
         assert len(captured) == 1
@@ -338,18 +346,29 @@ class TestLoggerHandlerCleanup:
 # ---------------------------------------------------------------------------
 
 class TestWatcherEnvVar:
-    """JCODEMUNCH_WATCH env var enables watcher when --watcher flag absent."""
+    """JCODEMUNCH_WATCH env var enables watcher when --watcher flag absent.
+
+    After the config-layering fix, env vars flow through config._apply_env_var_fallback
+    rather than being read directly in _get_watcher_enabled.  These tests mock
+    config_module.get to isolate _get_watcher_enabled from disk config state.
+    """
 
     def test_env_var_enables_watcher(self):
-        """JCODEMUNCH_WATCH=1 enables watcher when --watcher flag not present."""
+        """config.get('watch') == True (via env var fallback) enables watcher."""
         from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
         captured = []
 
         def capturing_run(coro, *a, **kw):
             captured.append(coro)
 
-        with patch.dict(os.environ, {"JCODEMUNCH_WATCH": "1"}), \
-             patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run):
+        def mock_get(key, default=None):
+            if key == "watch":
+                return True  # simulates JCODEMUNCH_WATCH=1 applied through config system
+            return real_get(key, default)
+
+        with patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run), \
+             patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
             try:
                 main(["serve"])
             except SystemExit:
@@ -360,15 +379,21 @@ class TestWatcherEnvVar:
         captured[0].close()
 
     def test_flag_overrides_env_var(self):
-        """--watcher=false disables watcher even when JCODEMUNCH_WATCH=1."""
+        """--watcher=false disables watcher even when config returns watch=True."""
         from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
         captured = []
 
         def capturing_run(coro, *a, **kw):
             captured.append(coro)
 
-        with patch.dict(os.environ, {"JCODEMUNCH_WATCH": "1"}), \
-             patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run):
+        def mock_get(key, default=None):
+            if key == "watch":
+                return True
+            return real_get(key, default)
+
+        with patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run), \
+             patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
             try:
                 main(["serve", "--watcher=false"])
             except SystemExit:
@@ -379,15 +404,21 @@ class TestWatcherEnvVar:
         captured[0].close()
 
     def test_env_var_false_disables(self):
-        """JCODEMUNCH_WATCH=0 does NOT enable watcher."""
+        """config.get('watch') == False (JCODEMUNCH_WATCH=0 with no explicit config) does not start watcher."""
         from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
         captured = []
 
         def capturing_run(coro, *a, **kw):
             captured.append(coro)
 
-        with patch.dict(os.environ, {"JCODEMUNCH_WATCH": "0"}), \
-             patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run):
+        def mock_get(key, default=None):
+            if key == "watch":
+                return False  # simulates JCODEMUNCH_WATCH=0 / no config set
+            return real_get(key, default)
+
+        with patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run), \
+             patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
             try:
                 main(["serve"])
             except SystemExit:
@@ -395,6 +426,97 @@ class TestWatcherEnvVar:
 
         assert len(captured) == 1
         assert "watcher" not in captured[0].cr_code.co_name
+        captured[0].close()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Config "watch" key enables watcher
+# ---------------------------------------------------------------------------
+
+class TestWatcherConfig:
+    """Config file 'watch' key enables watcher when --watcher flag and env var absent."""
+
+    def test_config_watch_true_enables_watcher(self):
+        """config 'watch': true enables watcher when no flag/env var."""
+        from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
+        captured = []
+
+        def capturing_run(coro, *a, **kw):
+            captured.append(coro)
+
+        def mock_get(key, default=None):
+            if key == "watch":
+                return True
+            return real_get(key, default)
+
+        with patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run), \
+             patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
+            try:
+                main(["serve"])
+            except SystemExit:
+                pass
+
+        assert len(captured) == 1
+        assert "watcher" in captured[0].cr_code.co_name
+        captured[0].close()
+
+    def test_flag_overrides_config_watch_true(self):
+        """--watcher=false disables watcher even when config 'watch': true."""
+        from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
+        captured = []
+
+        def capturing_run(coro, *a, **kw):
+            captured.append(coro)
+
+        def mock_get(key, default=None):
+            if key == "watch":
+                return True
+            return real_get(key, default)
+
+        with patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run), \
+             patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
+            try:
+                main(["serve", "--watcher=false"])
+            except SystemExit:
+                pass
+
+        assert len(captured) == 1
+        assert "watcher" not in captured[0].cr_code.co_name
+        captured[0].close()
+
+    def test_config_watch_takes_priority_over_env_var(self):
+        """Config file 'watch': true wins over JCODEMUNCH_WATCH=0.
+
+        After removing the direct os.environ.get("JCODEMUNCH_WATCH") check from
+        _get_watcher_enabled, the env var is only a fallback for when the key is
+        absent from the config file (handled by config._apply_env_var_fallback).
+        An explicit config file setting always beats the env var.
+        """
+        from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
+        captured = []
+
+        def capturing_run(coro, *a, **kw):
+            captured.append(coro)
+
+        def mock_get(key, default=None):
+            if key == "watch":
+                return True  # simulates config file explicitly set "watch": true
+            return real_get(key, default)
+
+        with patch.dict(os.environ, {"JCODEMUNCH_WATCH": "0"}), \
+             patch("jcodemunch_mcp.server.asyncio.run", side_effect=capturing_run), \
+             patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get):
+            try:
+                main(["serve"])
+            except SystemExit:
+                pass
+
+        assert len(captured) == 1
+        # Config file wins — watcher IS enabled despite JCODEMUNCH_WATCH=0
+        assert "watcher" in captured[0].cr_code.co_name
         captured[0].close()
 
 
@@ -592,3 +714,157 @@ class TestNoValidDirsEmbedded:
                 )
 
         asyncio.run(run())  # Should complete without raising
+
+
+# ---------------------------------------------------------------------------
+# Feature: Config-driven watcher parameters
+# ---------------------------------------------------------------------------
+
+class TestWatcherConfigParams:
+    """Watcher parameters read from config.jsonc when CLI flags absent."""
+
+    def _run_serve_capture_kwargs(self, config_overrides, cli_args=None):
+        """Run main(['serve', ...]) and capture watcher_kwargs + log_path.
+
+        Returns (watcher_kwargs, log_path) or (None, None) if watcher was not enabled.
+        """
+        from jcodemunch_mcp.server import main
+        from jcodemunch_mcp.config import get as real_get
+
+        base_config = {"watch": True, "use_ai_summaries": False}
+        base_config.update(config_overrides)
+
+        def mock_get(key, default=None):
+            if key in base_config:
+                return base_config[key]
+            return real_get(key, default)
+
+        def noop_run(coro, *a, **kw):
+            # Close coroutine to avoid ResourceWarning
+            if hasattr(coro, "close"):
+                coro.close()
+
+        with patch("jcodemunch_mcp.server.config_module.get", side_effect=mock_get), \
+             patch("jcodemunch_mcp.server._run_server_with_watcher") as mock_rsww, \
+             patch("jcodemunch_mcp.server.asyncio.run", side_effect=noop_run):
+            try:
+                main(cli_args or ["serve"])
+            except SystemExit:
+                pass
+
+        if not mock_rsww.called:
+            return None, None
+        args, kwargs_call = mock_rsww.call_args
+        # _run_server_with_watcher(server_func, server_args, watcher_kwargs, log_path)
+        watcher_kwargs = args[2] if len(args) > 2 else kwargs_call.get("watcher_kwargs")
+        log_path = args[3] if len(args) > 3 else kwargs_call.get("log_path")
+        return dict(watcher_kwargs), log_path
+
+    def test_debounce_from_config(self):
+        """watch_debounce_ms config value flows to watcher_kwargs."""
+        kwargs, _ = self._run_serve_capture_kwargs({"watch_debounce_ms": 5000})
+        assert kwargs is not None
+        assert kwargs["debounce_ms"] == 5000
+
+    def test_debounce_cli_overrides_config(self):
+        """--watcher-debounce overrides watch_debounce_ms from config."""
+        kwargs, _ = self._run_serve_capture_kwargs(
+            {"watch_debounce_ms": 5000},
+            ["serve", "--watcher-debounce=100"],
+        )
+        assert kwargs is not None
+        assert kwargs["debounce_ms"] == 100
+
+    def test_paths_from_config(self):
+        """watch_paths config value flows to watcher_kwargs."""
+        kwargs, _ = self._run_serve_capture_kwargs({"watch_paths": ["/tmp/proj"]})
+        assert kwargs is not None
+        assert kwargs["paths"] == ["/tmp/proj"]
+
+    def test_paths_cli_overrides_config(self):
+        """--watcher-path overrides watch_paths from config."""
+        kwargs, _ = self._run_serve_capture_kwargs(
+            {"watch_paths": ["/tmp/proj"]},
+            ["serve", "--watcher-path", "/other"],
+        )
+        assert kwargs is not None
+        assert kwargs["paths"] == ["/other"]
+
+    def test_paths_default_is_cwd(self):
+        """When neither CLI nor config provides paths, default is CWD."""
+        kwargs, _ = self._run_serve_capture_kwargs({})
+        assert kwargs is not None
+        assert kwargs["paths"] == [os.getcwd()]
+
+    def test_idle_timeout_from_config(self):
+        """watch_idle_timeout config value flows to watcher_kwargs."""
+        kwargs, _ = self._run_serve_capture_kwargs({"watch_idle_timeout": 30})
+        assert kwargs is not None
+        assert kwargs["idle_timeout_minutes"] == 30
+
+    def test_idle_timeout_cli_overrides_config(self):
+        """--watcher-idle-timeout overrides watch_idle_timeout from config."""
+        kwargs, _ = self._run_serve_capture_kwargs(
+            {"watch_idle_timeout": 30},
+            ["serve", "--watcher-idle-timeout=10"],
+        )
+        assert kwargs is not None
+        assert kwargs["idle_timeout_minutes"] == 10
+
+    def test_extra_ignore_from_config(self):
+        """watch_extra_ignore config value flows to watcher_kwargs."""
+        kwargs, _ = self._run_serve_capture_kwargs({"watch_extra_ignore": ["*.log", "build/"]})
+        assert kwargs is not None
+        assert kwargs["extra_ignore_patterns"] == ["*.log", "build/"]
+
+    def test_extra_ignore_cli_overrides_config(self):
+        """--watcher-extra-ignore overrides watch_extra_ignore from config."""
+        kwargs, _ = self._run_serve_capture_kwargs(
+            {"watch_extra_ignore": ["*.log"]},
+            ["serve", "--watcher-extra-ignore", "*.tmp"],
+        )
+        assert kwargs is not None
+        assert kwargs["extra_ignore_patterns"] == ["*.tmp"]
+
+    def test_follow_symlinks_from_config(self):
+        """watch_follow_symlinks config value flows to watcher_kwargs."""
+        kwargs, _ = self._run_serve_capture_kwargs({"watch_follow_symlinks": True})
+        assert kwargs is not None
+        assert kwargs["follow_symlinks"] is True
+
+    def test_follow_symlinks_cli_overrides_config(self):
+        """--watcher-follow-symlinks overrides watch_follow_symlinks from config."""
+        kwargs, _ = self._run_serve_capture_kwargs(
+            {"watch_follow_symlinks": False},
+            ["serve", "--watcher-follow-symlinks"],
+        )
+        assert kwargs is not None
+        assert kwargs["follow_symlinks"] is True
+
+    def test_log_from_config(self):
+        """watch_log config value flows to log_path."""
+        _, log_path = self._run_serve_capture_kwargs({"watch_log": "/tmp/w.log"})
+        assert log_path == "/tmp/w.log"
+
+    def test_log_cli_overrides_config(self):
+        """--watcher-log overrides watch_log from config."""
+        _, log_path = self._run_serve_capture_kwargs(
+            {"watch_log": "/tmp/w.log"},
+            ["serve", "--watcher-log=/other.log"],
+        )
+        assert log_path == "/other.log"
+
+    def test_use_ai_summaries_false_from_config(self):
+        """use_ai_summaries=false in config disables AI in watcher."""
+        kwargs, _ = self._run_serve_capture_kwargs({"use_ai_summaries": False})
+        assert kwargs is not None
+        assert kwargs["use_ai_summaries"] is False
+
+    def test_use_ai_summaries_cli_overrides_config(self):
+        """--watcher-no-ai-summaries overrides use_ai_summaries from config."""
+        kwargs, _ = self._run_serve_capture_kwargs(
+            {"use_ai_summaries": True},
+            ["serve", "--watcher-no-ai-summaries"],
+        )
+        assert kwargs is not None
+        assert kwargs["use_ai_summaries"] is False

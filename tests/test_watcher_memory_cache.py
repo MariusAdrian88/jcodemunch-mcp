@@ -108,3 +108,67 @@ class TestFastPathDeletedFiles:
         assert result2.get("deleted", 0) >= 1, (
             f"Expected at least 1 deleted file, got {result2}"
         )
+
+
+class TestHashCacheMissFallback:
+    """Regression tests for the hash-cache miss handling in _watch_single.
+
+    Previously, a cache miss caused the watcher to read the file from disk to
+    compute old_hash — but by the time watchfiles delivers the event the file
+    already has new content, so old_hash == new_hash and the change is silently
+    skipped as "unchanged". The fix replaces this with a sentinel "__cache_miss__"
+    that is guaranteed never to match any real content hash, forcing re-parse.
+    """
+
+    def test_cache_miss_forces_reindex(self, tmp_path):
+        """A modified file whose hash is absent from the memory cache must be re-indexed.
+
+        Simulate the scenario: file is indexed, then modified, but the watcher's
+        in-memory hash cache is empty (e.g. cold start).  Pass old_hash="__cache_miss__"
+        (the sentinel) and verify index_folder re-parses the file.
+        """
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.reindex_state import WatcherChange
+
+        test_file = tmp_path / "module.py"
+        test_file.write_text("def original(): pass\n")
+
+        # Initial index
+        result = index_folder(
+            path=str(tmp_path),
+            use_ai_summaries=False,
+            storage_path=str(tmp_path / ".code-index"),
+            incremental=False,
+        )
+        assert result["success"]
+
+        # Simulate file change + cache miss (sentinel old_hash)
+        test_file.write_text("def updated(): return 42\n")
+        abs_path = str(test_file.resolve())
+        watcher_changes = [WatcherChange("modified", abs_path, "__cache_miss__")]
+
+        result2 = index_folder(
+            path=str(tmp_path),
+            use_ai_summaries=False,
+            storage_path=str(tmp_path / ".code-index"),
+            incremental=True,
+            changed_paths=watcher_changes,
+        )
+        assert result2["success"]
+        # Must NOT return "No changes detected" — the file change must be processed
+        assert result2.get("message") != "No changes detected", (
+            "Cache-miss sentinel must force re-parse, not skip the file"
+        )
+        assert result2.get("changed", 0) >= 1 or result2.get("new", 0) >= 1, (
+            f"Expected at least 1 changed/new file, got {result2}"
+        )
+
+    def test_sentinel_never_equals_real_hash(self):
+        """__cache_miss__ must not be a valid SHA-256 hex digest."""
+        import hashlib
+        sentinel = "__cache_miss__"
+        # Real hashes are 64-char hex strings; the sentinel is neither
+        assert not all(c in "0123456789abcdef" for c in sentinel), (
+            "Sentinel must be distinguishable from a real content hash"
+        )
+        assert len(sentinel) != 64

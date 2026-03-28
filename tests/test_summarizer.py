@@ -525,15 +525,17 @@ def test_openai_summarizer_remote_endpoint_requires_allow_flag():
 def test_openai_summarizer_timeout_config():
     """OpenAIBatchSummarizer configures custom timeouts via OPENAI_TIMEOUT."""
     # Test valid float parsing
+    # The summarizer reads config.get("allow_remote_summarizer") — patch it
+    # alongside the env vars so the non-localhost URL is accepted.
     with patch.dict(
         "os.environ",
         {
             "OPENAI_API_BASE": "http://test",
             "OPENAI_TIMEOUT": "120.5",
-            "JCODEMUNCH_ALLOW_REMOTE_SUMMARIZER": "1",
         },
         clear=True,
-    ):
+    ), patch("jcodemunch_mcp.summarizer.batch_summarize._config.get",
+             side_effect=lambda k, d=None: True if k == "allow_remote_summarizer" else d):
         summarizer = OpenAIBatchSummarizer()
         assert summarizer.client is not None
         assert summarizer.client.timeout.read == 120.5
@@ -544,10 +546,10 @@ def test_openai_summarizer_timeout_config():
         {
             "OPENAI_API_BASE": "http://test",
             "OPENAI_TIMEOUT": "invalid",
-            "JCODEMUNCH_ALLOW_REMOTE_SUMMARIZER": "1",
         },
         clear=True,
-    ):
+    ), patch("jcodemunch_mcp.summarizer.batch_summarize._config.get",
+             side_effect=lambda k, d=None: True if k == "allow_remote_summarizer" else d):
         summarizer = OpenAIBatchSummarizer()
         assert summarizer.client is not None
         assert summarizer.client.timeout.read == 60.0

@@ -163,26 +163,6 @@ Precomputes and caches all symbol embeddings in one pass. This is an optional wa
 
 ---
 
-#### `check_freshness` — Compare index SHA against current git HEAD
-
-```json
-{
-  "repo": "owner/repo"
-}
-```
-
-Compares the git HEAD SHA recorded at index time against the current HEAD for locally indexed repos.
-
-**Return fields:** `fresh` (bool), `indexed_sha`, `current_sha`, `commits_behind`.
-
-**Behavioral notes:**
-
-* only meaningful for repos indexed via `index_folder` with a local git repository present
-* GitHub-indexed repos return `is_local: false` with an explanatory message
-* `is_stale` is also included in `_meta` on `get_repo_outline` responses
-
----
-
 #### `invalidate_cache` — Delete index for a repository
 
 ```json
@@ -707,34 +687,6 @@ Reports added, removed, or changed symbols by comparing two indexed snapshots us
 
 ---
 
-### Freshness and Backpressure
-
-#### `wait_for_fresh` — Wait for watcher reindex to complete
-
-```json
-{
-  "repo": "local/project-abc123",
-  "timeout_ms": 500
-}
-```
-
-Blocks until the watcher's in-progress reindex completes for the specified repo, or until timeout.
-
-**Return shapes:**
-
-* Already fresh: `{"fresh": true, "waited_ms": 0}`
-* Waited and got fresh: `{"fresh": true, "waited_ms": 123}`
-* Timeout: `{"fresh": false, "waited_ms": 500, "reason": "timeout"}`
-* Persistent failure (2nd+ consecutive): `{"fresh": false, "waited_ms": 0, "reason": "reindex_failed", "reindex_error": "...", "reindex_failures": 3}`
-
-**Behavioral notes:**
-
-* intended for multi-agent workflows where an agent writes files and needs to read fresh symbols immediately
-* uses `threading.Event.wait()` internally — dispatched via `asyncio.to_thread` in `call_tool`
-* in strict freshness mode, all read query tools automatically wait before returning (this tool is not needed in that mode)
-
----
-
 ### Observability
 
 #### `get_session_stats` — Token savings statistics
@@ -940,32 +892,12 @@ State is managed through three lifecycle functions:
 * `mark_reindex_done(repo)` — clears reindexing, sets event, clears stale_since and failures
 * `mark_reindex_failed(repo, error)` — clears reindexing, sets event (unblocks waiters), increments failures, preserves stale_since
 
-### Staleness signaling via `_meta`
-
-Every query response includes staleness fields in `_meta`:
-
-```json
-{
-  "_meta": {
-    "index_stale": true,
-    "reindex_in_progress": true,
-    "stale_since_ms": 47
-  }
-}
-```
-
-* `index_stale`: true when the repo is actively reindexing or the previous reindex failed (stale_since is set)
-* `reindex_in_progress`: true only while actively reindexing
-* `stale_since_ms`: milliseconds since the index first became stale, or null
-
-**Failure escalation:** on the 1st consecutive failure, only `index_stale: true` is set (transient tolerance). On the 2nd+ consecutive failure, `reindex_error` and `reindex_failures` are added to `_meta`.
-
 ### Freshness modes
 
-The server supports two freshness modes, controlled by `--freshness-mode` or `JCODEMUNCH_FRESHNESS_MODE`:
+The server supports two freshness modes, controlled by `freshness_mode` config key (or `--freshness-mode` CLI flag):
 
-* **`relaxed`** (default): query tools return immediately regardless of reindex state. Agents can inspect `_meta` staleness fields or call `wait_for_fresh` explicitly.
-* **`strict`**: all read query tools automatically wait up to 500ms for any in-progress reindex to complete before returning. Write tools (`index_folder`, `index_repo`, `index_file`, `invalidate_cache`) and utility tools (`list_repos`, `get_session_stats`, `wait_for_fresh`) are excluded from the wait.
+* **`relaxed`** (default): query tools return immediately regardless of reindex state.
+* **`strict`**: all read query tools automatically wait up to 500ms for any in-progress reindex to complete before returning. Write tools (`index_folder`, `index_repo`, `index_file`, `invalidate_cache`) and utility tools (`list_repos`, `get_session_stats`) are excluded from the wait.
 
 The strict-mode wait uses `threading.Event.wait()` dispatched via `asyncio.to_thread` to avoid blocking the event loop.
 
@@ -1035,16 +967,12 @@ Representative envelope:
     "tokens_saved": 2450,
     "total_tokens_saved": 184320,
     "estimate_method": "...",
-    "index_stale": false,
-    "reindex_in_progress": false,
-    "stale_since_ms": null
   }
 }
 ```
 
 ### Common `_meta` fields
 
-* **`powered_by`**: attribution string, always present
 * **`timing_ms`**: elapsed execution time in milliseconds
 * **`repo`**: repository identifier
 * **`symbol_count`**: symbol count where relevant to the operation
@@ -1053,18 +981,6 @@ Representative envelope:
 * **`tokens_saved`**: per-call token-savings estimate
 * **`total_tokens_saved`**: cumulative saved-token estimate across calls
 * **`estimate_method`**: label describing how the savings estimate was computed
-
-### Staleness `_meta` fields
-
-Present on all query responses when a watcher is active:
-
-* **`index_stale`**: whether the repo's index is stale (reindexing or failed)
-* **`reindex_in_progress`**: whether the repo is actively reindexing right now
-* **`stale_since_ms`**: milliseconds since the index first became stale, or null
-* **`reindex_error`**: error message (only on 2nd+ consecutive failure)
-* **`reindex_failures`**: failure count (only on 2nd+ consecutive failure)
-
-For tools without a `repo` parameter (except excluded tools like `list_repos` and `get_session_stats`), global staleness is reported: `index_stale` and `reindex_in_progress` reflect whether *any* repo is currently reindexing.
 
 The exact `_meta` shape may vary by tool, but the response contract emphasizes explicit operational metadata rather than opaque output.
 
@@ -1221,7 +1137,7 @@ Key optimizations:
 * **Memory hash cache**: avoids loading the full SQLite index on each debounce tick (~57ms savings)
 * **Watcher fast path**: when the watcher knows the exact changed files, `index_folder` skips full directory discovery (~3s → ~50ms on Windows)
 * **Deferred summarization**: AI summaries are computed in a background thread, so the index is available immediately with empty summaries that are filled in asynchronously
-* **Per-repo backpressure**: each watched repo has independent reindex state with `threading.Event`-based signaling, enabling agents to wait for freshness via `wait_for_fresh` or automatic strict-mode waits
+* **Per-repo backpressure**: each watched repo has independent reindex state with `threading.Event`-based signaling; in strict freshness mode, query tools automatically wait for reindex completion
 
 The `watch-claude` variant extends this for Claude Code specifically: it discovers worktrees via hook-driven events (`WorktreeCreate`/`WorktreeRemove` writing to a JSONL manifest) and/or by polling `git worktree list` on specified repositories. Both mechanisms are cross-platform and layout-agnostic.
 

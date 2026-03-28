@@ -85,6 +85,10 @@ def _backdate_index(tmp_path, owner, name, days):
         )
     finally:
         conn.close()
+    # Evict cache — direct DB edit bypasses save_index's cache update
+    from jcodemunch_mcp.storage.sqlite_store import _cache_evict
+    safe_name = store._sqlite._safe_repo_component(name, "name")
+    _cache_evict(owner, safe_name)
 
 
 def test_get_repo_outline_staleness_warning_when_old(tmp_path):

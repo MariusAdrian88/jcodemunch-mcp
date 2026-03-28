@@ -371,17 +371,16 @@ async def _watch_single(
                     # For deletions, old_hash comes from our memory cache
                     old_hash = _hash_cache.get(Path(p).relative_to(folder_path).as_posix(), "")
                 elif ct == Change.modified:
-                    # For modifications, read the current file hash BEFORE the watcher detects the change
-                    # Use memory cache as hint; if not available, compute from file
+                    # Use memory cache as the source of truth for old_hash.
+                    # Do NOT fall back to reading the file: by the time watchfiles
+                    # delivers the event, the file already has new content, so reading
+                    # it would produce old_hash == new_hash and the change would be
+                    # silently skipped as "unchanged" in index_folder.
+                    # Sentinel "__cache_miss__" keeps use_memory_hash_cache=True (fast
+                    # path active, no full-index disk load) while guaranteeing the file
+                    # is re-parsed rather than skipped.
                     cached_rel = Path(p).relative_to(folder_path).as_posix()
-                    old_hash = _hash_cache.get(cached_rel, "")
-                    if not old_hash:
-                        # Fall back: read file to get old hash (should be rare)
-                        try:
-                            with open(p, "r", encoding="utf-8", errors="replace") as f:
-                                old_hash = _file_hash(f.read())
-                        except Exception:
-                            old_hash = ""
+                    old_hash = _hash_cache.get(cached_rel, "") or "__cache_miss__"
                 else:
                     # For additions, no old hash
                     old_hash = ""

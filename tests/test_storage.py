@@ -568,6 +568,9 @@ def test_index_integrity_checksum(tmp_path):
 
     # Corrupting the db file raises DatabaseError
     db_path.write_bytes(b"not a sqlite db")
+    # Evict cache — corrupted file must be read from disk, not served from cache
+    from jcodemunch_mcp.storage.sqlite_store import _cache_evict
+    _cache_evict("check", "sum")
     with pytest.raises(sqlite3.DatabaseError):
         store.load_index("check", "sum")
 

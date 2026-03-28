@@ -10,10 +10,10 @@ from jcodemunch_mcp.server import server, list_tools, call_tool, _coerce_argumen
 
 @pytest.mark.asyncio
 async def test_server_lists_all_tools():
-    """Test that server lists all 32 tools."""
+    """Test that server lists all 30 tools."""
     tools = await list_tools()
 
-    assert len(tools) == 32
+    assert len(tools) == 30
 
     names = {t.name for t in tools}
     expected = {
@@ -23,7 +23,7 @@ async def test_server_lists_all_tools():
         "find_importers", "find_references", "check_references", "search_columns", "get_context_bundle",
         "get_session_stats", "get_dependency_graph", "get_blast_radius",
         "get_symbol_diff", "get_class_hierarchy", "get_related_symbols", "suggest_queries",
-        "wait_for_fresh", "check_freshness", "get_symbol_importance", "find_dead_code",
+        "get_symbol_importance", "find_dead_code",
         "get_changed_symbols", "get_ranked_context", "embed_repo",
     }
     assert names == expected
@@ -637,8 +637,8 @@ async def test_disabled_tools_filtered_from_schema(monkeypatch):
         assert "index_repo" not in tool_names
         assert "search_columns" not in tool_names
         assert "get_file_tree" in tool_names  # Not disabled
-        # Total should be 30 (32 - 2 disabled)
-        assert len(tools) == 30
+        # Total should be 28 (30 - 2 disabled)
+        assert len(tools) == 28
     finally:
         config_module._GLOBAL_CONFIG.clear()
         config_module._GLOBAL_CONFIG.update(orig_config)
@@ -646,7 +646,7 @@ async def test_disabled_tools_filtered_from_schema(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disabled_tools_empty_all_tools_present(monkeypatch):
-    """When disabled_tools is empty, all 26 tools are present."""
+    """When disabled_tools is empty, all 30 tools are present."""
     from jcodemunch_mcp import config as config_module
 
     orig_config = config_module._GLOBAL_CONFIG.copy()
@@ -656,7 +656,7 @@ async def test_disabled_tools_empty_all_tools_present(monkeypatch):
         config_module._GLOBAL_CONFIG["disabled_tools"] = []
 
         tools = await list_tools()
-        assert len(tools) == 32
+        assert len(tools) == 30
     finally:
         config_module._GLOBAL_CONFIG.clear()
         config_module._GLOBAL_CONFIG.update(orig_config)
@@ -664,7 +664,7 @@ async def test_disabled_tools_empty_all_tools_present(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_meta_fields_null_keeps_meta_envelope():
-    """meta_fields=null keeps the _meta envelope."""
+    """meta_fields=null passes through tool-native _meta unchanged."""
     from jcodemunch_mcp import config as config_module
 
     orig_config = config_module._GLOBAL_CONFIG.copy()
@@ -672,10 +672,11 @@ async def test_meta_fields_null_keeps_meta_envelope():
 
     try:
         config_module._GLOBAL_CONFIG["meta_fields"] = None
-        with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": []}):
+        with patch("jcodemunch_mcp.server.list_repos", return_value={"repos": [], "_meta": {"timing_ms": 1.0}}):
             result = await call_tool("list_repos", {})
         payload = json.loads(result[0].text)
         assert "_meta" in payload
+        assert payload["_meta"]["timing_ms"] == 1.0
     finally:
         config_module._GLOBAL_CONFIG.clear()
         config_module._GLOBAL_CONFIG.update(orig_config)

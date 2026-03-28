@@ -74,7 +74,6 @@ Always use jCodemunch-MCP tools for code navigation. Never fall back to Read, Gr
 - what symbols actually changed since last commit → `get_changed_symbols`
 - find unreachable/dead code → `find_dead_code`
 - most important symbols by architecture → `get_symbol_importance`
-- is the index current → `check_freshness`
 - class hierarchy → `get_class_hierarchy`
 - related symbols → `get_related_symbols`
 - diff two snapshots → `get_symbol_diff`
@@ -123,7 +122,6 @@ Relationships & impact:
   what symbols changed in git     → get_changed_symbols
   find unreachable/dead code      → find_dead_code
   most important symbols          → get_symbol_importance
-  is the index current            → check_freshness
   class hierarchy                 → get_class_hierarchy
 
 Retrieval with token budget:
