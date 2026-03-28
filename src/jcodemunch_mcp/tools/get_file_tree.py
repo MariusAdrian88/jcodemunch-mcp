@@ -5,12 +5,11 @@ import time
 from collections import Counter
 from typing import Optional
 
+from .. import config as _config
 from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided
 from ._utils import resolve_repo
 
-# Hard cap on files returned in a single get_file_tree call.
-# Prevents MCP response overflow on bloated indexes (e.g. indexed before
-# .gitignore was in place).  Use path_prefix to scope larger trees.
+# Fallback used only when config is not yet loaded (e.g. tests that bypass main()).
 _DEFAULT_MAX_FILES = 500
 
 
@@ -18,7 +17,7 @@ def get_file_tree(
     repo: str,
     path_prefix: str = "",
     include_summaries: bool = False,
-    max_files: int = _DEFAULT_MAX_FILES,
+    max_files: Optional[int] = None,
     storage_path: Optional[str] = None
 ) -> dict:
     """Get repository file tree, optionally filtered by path prefix.
@@ -37,6 +36,11 @@ def get_file_tree(
         Dict with hierarchical tree structure
     """
     start = time.perf_counter()
+
+    # Resolve cap: per-call override → config → hardcoded fallback
+    if max_files is None:
+        max_files = _config.get("file_tree_max_files", _DEFAULT_MAX_FILES)
+    max_files = max(1, max_files)  # guard against 0 or negative
 
     try:
         owner, name = resolve_repo(repo, storage_path)

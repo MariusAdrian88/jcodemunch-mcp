@@ -1120,6 +1120,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     repo=arguments["repo"],
                     path_prefix=arguments.get("path_prefix", ""),
                     include_summaries=arguments.get("include_summaries", False),
+                    max_files=arguments.get("max_files"),
                     storage_path=storage_path,
                 )
             )

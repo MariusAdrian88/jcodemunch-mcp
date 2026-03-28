@@ -151,6 +151,22 @@ def _cache_evict(owner: str, name: str) -> None:
         _index_cache.pop((owner, name), None)
 
 
+def _db_mtime_ns(db_path: Path) -> int:
+    """Return the most recent mtime_ns between .db and .db-wal files.
+
+    SQLite WAL mode may not update the .db file's mtime on every commit,
+    so we check both files and return the maximum to ensure cache
+    invalidation works correctly across processes.
+    """
+    db_mtime = db_path.stat().st_mtime_ns
+    wal_path = Path(str(db_path) + "-wal")
+    try:
+        wal_mtime = wal_path.stat().st_mtime_ns
+        return max(db_mtime, wal_mtime)
+    except FileNotFoundError:
+        return db_mtime
+
+
 def _cache_clear() -> None:
     """Clear entire index cache.
 
@@ -469,7 +485,13 @@ class SQLiteIndexStore:
         # Pre-warm cache so the next load_index() is instant
         # Use safe_name to match the key used by load_index's _cache_get
         safe_name = self._safe_repo_component(name, "name")
-        _cache_put(owner, safe_name, db_path.stat().st_mtime_ns, index)
+        # Touch .db mtime BEFORE caching so the cached mtime matches what
+        # cross-process readers will see via _db_mtime_ns().
+        try:
+            os.utime(db_path)
+        except OSError:
+            pass  # best-effort cross-process hint
+        _cache_put(owner, safe_name, _db_mtime_ns(db_path), index)
         return index
 
     def load_index(self, owner: str, name: str) -> Optional["CodeIndex"]:
@@ -483,7 +505,7 @@ class SQLiteIndexStore:
 
         # Check in-memory cache (mirrors old @lru_cache on JSON load)
         try:
-            mtime_ns = db_path.stat().st_mtime_ns
+            mtime_ns = _db_mtime_ns(db_path)
         except OSError:
             return None  # file was deleted between exists() and stat()
         cached = _cache_get(owner, safe_name, mtime_ns)
@@ -510,7 +532,7 @@ class SQLiteIndexStore:
 
         # Populate cache (re-stat to capture any WAL checkpoint mtime change)
         try:
-            post_mtime_ns = db_path.stat().st_mtime_ns
+            post_mtime_ns = _db_mtime_ns(db_path)
         except OSError:
             post_mtime_ns = mtime_ns  # file gone; cache with pre-load mtime
         _cache_put(owner, safe_name, post_mtime_ns, index)
@@ -550,7 +572,7 @@ class SQLiteIndexStore:
         safe_name = self._safe_repo_component(name, "name")
         old_index = None
         try:
-            old_mtime = db_path.stat().st_mtime_ns
+            old_mtime = _db_mtime_ns(db_path)
             old_index = _cache_get(owner, safe_name, old_mtime)
         except OSError:
             pass
@@ -733,7 +755,13 @@ class SQLiteIndexStore:
                             sym["_dl"] = old_sym["_dl"]
 
         # Pre-warm cache so the next load_index() is instant
-        _cache_put(owner, safe_name, db_path.stat().st_mtime_ns, index)
+        # Touch .db mtime BEFORE caching so the cached mtime matches what
+        # cross-process readers will see via _db_mtime_ns().
+        try:
+            os.utime(db_path)
+        except OSError:
+            pass  # best-effort cross-process hint
+        _cache_put(owner, safe_name, _db_mtime_ns(db_path), index)
         return index
 
     def detect_changes_with_mtimes(

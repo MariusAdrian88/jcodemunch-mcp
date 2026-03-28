@@ -26,6 +26,8 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_MAX_INDEX_FILES": "max_index_files",
     "JCODEMUNCH_STALENESS_DAYS": "staleness_days",
     "JCODEMUNCH_MAX_RESULTS": "max_results",
+    "JCODEMUNCH_FILE_TREE_MAX_FILES": "file_tree_max_files",
+    "JCODEMUNCH_GITIGNORE_WARN_THRESHOLD": "gitignore_warn_threshold",
     "JCODEMUNCH_EXTRA_IGNORE_PATTERNS": "extra_ignore_patterns",
     "JCODEMUNCH_EXTRA_EXTENSIONS": "extra_extensions",
     "JCODEMUNCH_CONTEXT_PROVIDERS": "context_providers",
@@ -60,6 +62,8 @@ DEFAULTS = {
     "max_index_files": 10000,
     "staleness_days": 7,
     "max_results": 500,
+    "file_tree_max_files": 500,
+    "gitignore_warn_threshold": 500,
     "extra_ignore_patterns": [],
     "exclude_secret_patterns": [],
     "extra_extensions": {},
@@ -99,6 +103,8 @@ CONFIG_TYPES = {
     "max_index_files": int,
     "staleness_days": int,
     "max_results": int,
+    "file_tree_max_files": int,
+    "gitignore_warn_threshold": int,
     "extra_ignore_patterns": list,
     "exclude_secret_patterns": list,
     "extra_extensions": dict,
@@ -128,6 +134,7 @@ CONFIG_TYPES = {
     "summarizer_concurrency": int,
     "allow_remote_summarizer": bool,
     "path_map": str,
+    "version": str,
 }
 
 
@@ -299,6 +306,7 @@ def load_config(storage_path: str | None = None) -> None:
                                         "Config key 'trusted_folders' contains non-absolute path "
                                         f"'{folder}'"
                                     )
+
                             _GLOBAL_CONFIG[key] = list(valid_folders)
                         else:
                             _GLOBAL_CONFIG[key] = value
@@ -312,6 +320,7 @@ def load_config(storage_path: str | None = None) -> None:
                             type(value).__name__,
                         )
                     # Ignore unknown keys silently
+
         except json.JSONDecodeError as e:
             logger.error("Failed to parse config.jsonc: %s", e)
             _GLOBAL_CONFIG = deepcopy(DEFAULTS)
@@ -659,27 +668,35 @@ def validate_config(config_path: str) -> list[str]:
 
 def generate_template() -> str:
     """Return default config.jsonc content."""
+    from . import __version__
     from .parser.languages import LANGUAGE_REGISTRY
 
-    languages_list = list(LANGUAGE_REGISTRY.keys())
-    lang_str = ", ".join(f'"{lang}"' for lang in languages_list)
+    # Sorted alphabetically for readability - use .sorted() to ensure always sorted
+    languages_list = sorted(LANGUAGE_REGISTRY.keys())
+    lang_str = "\n  ".join(f'"{lang}",' for lang in languages_list)
 
-    # All available tools (for disabled_tools reference)
-    all_tools = [
+    # All available tools (for disabled_tools reference) - sorted alphabetically
+    # Removed: wait_for_fresh (v1.12.0 - check_freshness and wait_for_fresh tools removed)
+    all_tools = sorted([
         "check_references",
+        "embed_repo",
+        "find_dead_code",
         "find_importers",
         "find_references",
         "get_blast_radius",
+        "get_changed_symbols",
         "get_class_hierarchy",
         "get_context_bundle",
         "get_dependency_graph",
         "get_file_content",
         "get_file_outline",
         "get_file_tree",
+        "get_ranked_context",
         "get_related_symbols",
         "get_repo_outline",
         "get_session_stats",
         "get_symbol_diff",
+        "get_symbol_importance",
         "get_symbol_source",
         "index_file",
         "index_folder",
@@ -691,18 +708,22 @@ def generate_template() -> str:
         "search_symbols",
         "search_text",
         "suggest_queries",
-        "wait_for_fresh",
-    ]
+    ])
     tools_str = "\n  // ".join(f'"{t}",' for t in all_tools)
 
     # All available meta_fields (for template documentation)
-    meta_fields_list = [
-        "timing_ms", "powered_by", "index_stale", "reindex_in_progress",
-        "stale_since_ms", "reindex_error", "reindex_failures",
-        "candidates_scored", "token_budget", "tokens_used", "tokens_remaining",
-    ]
-    # Commented-out example for meta_fields section in template (each field on its own line)
-    meta_str = "\n  //   ".join(f'"{mf}",' for mf in meta_fields_list)
+    # Removed (v1.12.0): index_stale, reindex_in_progress, stale_since_ms,
+    #   reindex_error, reindex_failures (staleness fields removed with check_freshness)
+    meta_fields_list = sorted([
+        "candidates_scored",
+        "powered_by",
+        "timing_ms",
+        "token_budget",
+        "tokens_remaining",
+        "tokens_used",
+    ])
+    # Commented-out meta_fields list (each field on its own line, like disabled_tools)
+    meta_str = "\n  // ".join(f'"{mf}",' for mf in meta_fields_list)
 
     return f'''// jcodemunch-mcp configuration
 // Global: ~/.code-index/config.jsonc
@@ -711,34 +732,83 @@ def generate_template() -> str:
 // All values below show defaults. Uncomment to override.
 // Env vars still work as fallback but are deprecated.
 {{
+  // Config version - do not edit. Used for additive migrations.
+  "version": "{__version__}",
+
   // === Indexing ===
   // "use_ai_summaries": true,
+  //   Enable AI-generated symbol summaries (requires ANTHROPIC_API_KEY or GOOGLE_API_KEY).
+  //   Set false/0/no/off to disable globally.
+
   // "trusted_folders": [],
+  //   Directories allowed for indexing when whitelist_mode is true.
+  //   In whitelist mode (default), only these folders can be indexed.
+  //   In blacklist mode (whitelist_mode=false), these folders are blocked.
+
+  // "trusted_folders_whitelist_mode": true,
+  //   true = only trust folders in trusted_folders list (default, secure).
+  //   false = trust all folders EXCEPT those in trusted_folders (blocklist mode).
+
   // "max_folder_files": 2000,
+  //   Maximum number of files to index when indexing a local folder.
+  //   Prevents accidental massive indexing jobs.
+
+  // "gitignore_warn_threshold": 500,
+  //   Emit a warning during index_folder when no root .gitignore is found
+  //   and the indexed file count reaches this value. Helps catch accidental
+  //   indexing of build artifacts or vendored dependencies before they
+  //   bloat the index. Set 0 to disable the warning entirely.
+
   // "max_index_files": 10000,
+  //   Maximum number of files to index when indexing a GitHub repo.
+  //   Separate cap from max_folder_files for different use cases.
+
   // "staleness_days": 7,
+  //   Days before an index is considered stale (warning only, no blocking).
+
   // "max_results": 500,
+  //   Maximum number of results returned by search operations.
+
+  // "file_tree_max_files": 500,
+  //   Maximum number of files returned by get_file_tree in a single call.
+  //   Prevents token overflow on large or bloated indexes. The response
+  //   includes a hint to use path_prefix when this cap is hit.
+  //   Can also be overridden per-call via the max_files tool parameter.
+
   // "extra_ignore_patterns": [],
+  //   Additional gitignore-style patterns to exclude from indexing.
+  //   Merged with JCODEMUNCH_EXTRA_IGNORE_PATTERNS env var.
+
+  // "exclude_secret_patterns": [],
+  //   Glob patterns to exclude from *secret* detection.
+  //   Use when *secret* has false positives on specific paths.
+
   // "extra_extensions": {{}},
+  //   Map additional file extensions to languages.
+  //   Example: {{".mpl": "cpp"}} to parse .mpl files as C++.
+
   // "context_providers": true,
+  //   Enable context providers for enhanced AI summarization.
+  //   Set false to disable (faster indexing, less context).
 
   // === Meta Response Control ===
   // Allowlist of _meta fields to include in responses.
   // Empty list = no _meta at all (maximum token savings).
   // Absent/null = all fields included (backward compatible default).
   // Uncomment and set to a list of field names to include only those fields.
-  // Available fields:{meta_str}
-  // "meta_fields": [
-  //   "timing_ms",
-  //   "powered_by"
-  // ],
-  "meta_fields": null,
+  // All available meta fields (sorted alphabetically, each on its own line):
+  "meta_fields": [
+  // {meta_str}
+  ],
 
   // === Languages ===
   // All supported languages. Comment out to disable a language
   // and its dependent features (e.g. "sql" disables dbt parsing
   // and search_columns tool).
-  "languages": [{lang_str}],
+  // Each language on its own line (sorted alphabetically):
+  "languages": [
+     {lang_str}
+  ],
 
   // === Disabled Tools ===
   // Global: tools listed here are removed from the schema entirely.
@@ -772,31 +842,58 @@ def generate_template() -> str:
   }},
 
   // === Transport ===
+  // Protocol for MCP server communication:
+  //   stdio            - Default. Uses stdin/stdout. Works everywhere.
+  //   sse              - Server-Sent Events over HTTP. Persistent connection.
+  //   streamable-http  - Streamable HTTP. Alternative persistent HTTP mode.
+  // When using sse or streamable-http, also set host and port.
   // "transport": "stdio",
   // "host": "127.0.0.1",
+  //   Bind address for HTTP transports. Use 0.0.0.0 for all interfaces.
   // "port": 8901,
+  //   Port for HTTP transports (sse, streamable-http).
   // "rate_limit": 0,
+  //   Max requests per minute per client IP. 0 = disabled (default).
 
   // === Watcher ===
   // "watch": false,
+  //   Enable automatic reindexing when files change.
+  //   Use "jcodemunch-mcp watch <paths>" CLI command to activate.
   // "watch_debounce_ms": 2000,
-  // "watch_extra_ignore": [],
-  // "watch_follow_symlinks": false,
-  // "watch_idle_timeout": null,
-  // "watch_log": null,
-  // "watch_paths": [],
+  //   Milliseconds to wait after a file change before reindexing.
+  //   Higher values reduce CPU usage but slower detection.
   // "freshness_mode": "relaxed",
+  //   relaxed - Default. Index remains queryable during reindex.
+  //             Best for interactive use (IDE, chat).
+  //   strict  - Blocks queries until fresh index is ready.
+  //             Best for automation/CI where consistency matters.
   // "claude_poll_interval": 5.0,
+  //   Seconds between polling Claude Code worktrees for changes.
 
   // === Logging ===
   // "log_level": "WARNING",
+  //   DEBUG, INFO, WARNING, ERROR, CRITICAL. WARNING is default for less noise.
   // "log_file": null,
+  //   Path to log file. null = write to stderr.
 
   // === Privacy & Telemetry ===
   // "redact_source_root": false,
+  //   Replace absolute source_root paths with display_name in responses.
+  //   Set true to hide project paths from clients.
   // "stats_file_interval": 3,
+  //   Write session_stats.json every N tool calls. 0 = disable writes.
+  //   Lower values = more disk I/O but faster stats for external consumers.
   // "share_savings": true,
+  //   Enable anonymous token savings telemetry (helps project funding).
+  //   Set false/0 to disable.
   // "summarizer_concurrency": 4,
-  // "allow_remote_summarizer": false
+  //   Number of parallel threads for AI summarization.
+  //   Higher = faster indexing but more API calls.
+  // "allow_remote_summarizer": false,
+  //   Allow remote LLM endpoints for summarization (security risk).
+  //   Default false blocks non-local summarization.
+  // "path_map": "",
+  //   Cross-platform path remapping. Format: "orig1=new1,orig2=new2".
+  //   Allows indexes built on Linux to work on Windows and vice versa.
 }}
 '''

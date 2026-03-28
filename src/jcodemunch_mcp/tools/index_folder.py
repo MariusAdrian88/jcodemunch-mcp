@@ -768,10 +768,11 @@ def index_folder(
 
         # Warn when no root .gitignore is present and the file count is large —
         # a common cause of bloated indexes that then overflow get_file_tree.
-        _GITIGNORE_WARN_THRESHOLD = 500
+        gitignore_warn_threshold = _config.get("gitignore_warn_threshold", 500)
         if (
-            not (folder_path / ".gitignore").exists()
-            and len(source_files) >= _GITIGNORE_WARN_THRESHOLD
+            gitignore_warn_threshold > 0
+            and not (folder_path / ".gitignore").exists()
+            and len(source_files) >= gitignore_warn_threshold
         ):
             gitignore_warning = (
                 f"No .gitignore found in {folder_path}. "
