@@ -49,6 +49,8 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_WATCH_LOG": "watch_log",
     "JCODEMUNCH_WATCH_PATHS": "watch_paths",
     "JCODEMUNCH_FRESHNESS_MODE": "freshness_mode",
+    "JCODEMUNCH_SUMMARIZER_PROVIDER": "summarizer_provider",
+    "JCODEMUNCH_EMBED_MODEL": "embed_model",
     "JCODEMUNCH_CLAUDE_POLL_INTERVAL": "claude_poll_interval",
     "JCODEMUNCH_LOG_LEVEL": "log_level",
     "JCODEMUNCH_LOG_FILE": "log_file",
@@ -276,6 +278,9 @@ DEFAULTS = {
     "watch_log": None,
     "watch_paths": [],
     "freshness_mode": "relaxed",
+    "strict_timeout_ms": 500,
+    "summarizer_provider": "",
+    "embed_model": "",
     "claude_poll_interval": 5.0,
     "log_level": "WARNING",
     "log_file": None,
@@ -318,6 +323,9 @@ CONFIG_TYPES = {
     "watch_log": (str, type(None)),
     "watch_paths": list,
     "freshness_mode": str,
+    "strict_timeout_ms": int,
+    "summarizer_provider": str,
+    "embed_model": str,
     "claude_poll_interval": float,
     "log_level": str,
     "log_file": (str, type(None)),
@@ -1065,6 +1073,10 @@ def generate_template() -> str:
   //             Best for interactive use (IDE, chat).
   //   strict  - Blocks queries until fresh index is ready.
   //             Best for automation/CI where consistency matters.
+  // "strict_timeout_ms": 500,
+  //   Maximum milliseconds to block queries waiting for a reindex in strict mode.
+  //   After this timeout the query proceeds with the stale index.
+  //   Only applies when freshness_mode is "strict". Default: 500.
   // "claude_poll_interval": 5.0,
   //   Seconds between polling Claude Code worktrees for changes.
 
@@ -1087,6 +1099,14 @@ def generate_template() -> str:
   // "summarizer_concurrency": 4,
   //   Number of parallel threads for AI summarization.
   //   Higher = faster indexing but more API calls.
+  // "summarizer_provider": "",
+  //   Force a specific AI summarizer provider. Auto-detected from API keys when empty.
+  //   Valid values: "anthropic", "gemini", "openai", "minimax", "glm", "none".
+  //   "none" disables AI summaries regardless of API keys set.
+  // "embed_model": "",
+  //   Sentence-transformers model name for local (free) semantic embeddings.
+  //   Example: "all-MiniLM-L6-v2". Requires sentence-transformers package.
+  //   When set, takes priority over GOOGLE_API_KEY and OPENAI_API_KEY embeddings.
   // "allow_remote_summarizer": false,
   //   Allow remote LLM endpoints for summarization (security risk).
   //   Default false blocks non-local summarization.

@@ -509,10 +509,10 @@ def _create_summarizer() -> Optional[BaseSummarizer]:
 def get_provider_name() -> Optional[str]:
     """Return the active summarizer provider name, or None if disabled/unset.
 
-    Priority: explicit JCODEMUNCH_SUMMARIZER_PROVIDER env var > auto-detect by key.
+    Priority: summarizer_provider config key > JCODEMUNCH_SUMMARIZER_PROVIDER env var > auto-detect by key.
     Auto-detect order: Anthropic > Gemini > OpenAI-compatible > MiniMax > GLM-5.
     """
-    explicit = os.environ.get("JCODEMUNCH_SUMMARIZER_PROVIDER", "").lower().strip()
+    explicit = (_config.get("summarizer_provider", "") or os.environ.get("JCODEMUNCH_SUMMARIZER_PROVIDER", "")).lower().strip()
     if explicit in _VALID_PROVIDERS:
         return None if explicit == "none" else explicit
 

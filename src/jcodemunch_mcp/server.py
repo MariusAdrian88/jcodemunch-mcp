@@ -1056,7 +1056,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # MUST use asyncio.to_thread — threading.Event.wait() cannot run on the event loop.
         repo_arg = arguments.get("repo")
         if (name not in _EXCLUDED_FROM_STRICT and repo_arg):
-            await asyncio.to_thread(await_freshness_if_strict, repo_arg, timeout_ms=500)
+            strict_ms = config_module.get("strict_timeout_ms", 500)
+            await asyncio.to_thread(await_freshness_if_strict, repo_arg, timeout_ms=strict_ms)
 
         # Project-level tool disabling: check if tool is disabled for this project
         # Global disabled tools are filtered out in list_tools() schema; project-level

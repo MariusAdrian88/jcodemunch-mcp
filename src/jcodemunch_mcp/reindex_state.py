@@ -191,6 +191,8 @@ def await_freshness_if_strict(repo: str, timeout_ms: int = 500) -> bool:
 
     In relaxed mode, this returns immediately without waiting.
     In strict mode, waits up to timeout_ms for reindexing to complete.
+    timeout_ms defaults to 500 and is configurable via the strict_timeout_ms
+    config key in config.jsonc.
     Returns True (always — callers use _meta fields to inspect actual state).
     """
     if get_freshness_mode() != "strict":

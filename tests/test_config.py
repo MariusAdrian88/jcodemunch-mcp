@@ -174,6 +174,24 @@ class TestConfigDefaults:
         from src.jcodemunch_mcp.config import DEFAULTS
         assert DEFAULTS["disabled_tools"] == []
 
+    def test_default_strict_timeout_ms(self):
+        """strict_timeout_ms should default to 500ms."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["strict_timeout_ms"] == 500
+        assert CONFIG_TYPES["strict_timeout_ms"] is int
+
+    def test_default_summarizer_provider(self):
+        """summarizer_provider should default to empty string (auto-detect)."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["summarizer_provider"] == ""
+        assert CONFIG_TYPES["summarizer_provider"] is str
+
+    def test_default_embed_model(self):
+        """embed_model should default to empty string (no sentence-transformers model)."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["embed_model"] == ""
+        assert CONFIG_TYPES["embed_model"] is str
+
 
 class TestConfigLoading:
     """Test config file loading."""
