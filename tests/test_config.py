@@ -481,17 +481,18 @@ class TestTemplateGeneration:
         assert "meta_fields" in parsed
 
     def test_template_languages_synced_from_registry(self):
-        """Should include all languages from LANGUAGE_REGISTRY."""
+        """Should include all languages from LANGUAGE_REGISTRY as active entries."""
         from src.jcodemunch_mcp.config import generate_template
         from src.jcodemunch_mcp.parser.languages import LANGUAGE_REGISTRY
+        from src.jcodemunch_mcp.config import _strip_jsonc
+        import json
 
         template = generate_template()
-        stripped = _strip_jsonc(template)
-        parsed = json.loads(stripped)
+        parsed = json.loads(_strip_jsonc(template))
 
-        # All registry languages should be in template
+        # All registry languages should be present and active (not commented out)
         for lang in LANGUAGE_REGISTRY.keys():
-            assert lang in parsed["languages"]
+            assert lang in parsed["languages"], f"Language '{lang}' not found in parsed template"
 
 
 class TestGetDescriptions:

@@ -679,3 +679,129 @@ def test_v5_schema_no_json_in_data(tmp_path):
     assert s["keywords"] == ["flask"]
     assert s["content_hash"] == "xyz"
 
+
+def test_db_mtime_ns_no_wal(tmp_path):
+    """_db_mtime_ns returns .db mtime when WAL file is absent."""
+    from jcodemunch_mcp.storage.sqlite_store import _db_mtime_ns
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    db_path = tmp_path / "test.db"
+    conn = store._connect(db_path)
+    conn.close()
+
+    # WAL should not exist
+    wal_path = db_path.with_suffix(".db-wal")
+    assert not wal_path.exists(), "WAL file should not exist for this test"
+
+    result = _db_mtime_ns(db_path)
+    assert result == db_path.stat().st_mtime_ns
+
+
+def test_db_mtime_ns_wal_newer(tmp_path):
+    """_db_mtime_ns returns max of db and WAL mtime when both exist.
+
+    Note: SQLite may checkpoint the WAL when the connection closes, so we
+    manually create a WAL file to test the WAL-newer scenario.
+    """
+    from jcodemunch_mcp.storage.sqlite_store import _db_mtime_ns
+    import time
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    db_path = tmp_path / "test.db"
+
+    # Create the db with WAL mode
+    conn = store._connect(db_path)
+    conn.execute("INSERT INTO meta VALUES ('test', 'value')")
+    conn.close()
+
+    # Manually create a WAL file with newer mtime
+    wal_path = db_path.with_suffix(".db-wal")
+    wal_path.write_bytes(b"")  # Create empty WAL file
+    time.sleep(0.01)
+    wal_path.touch()  # Make WAL newer
+
+    # Also ensure db mtime is older
+    import os as _os
+    _os.utime(db_path, (wal_path.stat().st_atime, wal_path.stat().st_mtime - 1))
+
+    result = _db_mtime_ns(db_path)
+    assert result == wal_path.stat().st_mtime_ns, \
+        "_db_mtime_ns should return WAL mtime when WAL is newer"
+
+
+def test_db_mtime_ns_wal_older(tmp_path):
+    """_db_mtime_ns returns max of db and WAL mtime (db is newer)."""
+    from jcodemunch_mcp.storage.sqlite_store import _db_mtime_ns
+    import time
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    db_path = tmp_path / "test.db"
+
+    # Create the db with WAL mode
+    conn = store._connect(db_path)
+    conn.execute("INSERT INTO meta VALUES ('test', 'value')")
+    conn.close()
+
+    # Manually create a WAL file with older mtime
+    wal_path = db_path.with_suffix(".db-wal")
+    wal_path.write_bytes(b"")  # Create empty WAL file
+    time.sleep(0.01)
+    db_path.touch()  # Make db newer
+
+    result = _db_mtime_ns(db_path)
+    assert result == db_path.stat().st_mtime_ns, \
+        "_db_mtime_ns should return db mtime when db is newer"
+
+
+def test_cross_process_cache_invalidation(tmp_path):
+    """load_index() reloads when DB mtime changed, even without explicit cache eviction.
+
+    Tests the actual cross-process scenario:
+    - MCP server has a cached index with stale mtime T (populated before watcher wrote)
+    - Watcher process ran incremental_save() + os.utime() → DB mtime is now T' > T
+    - MCP server's next load_index() detects T' ≠ T and returns fresh data
+      WITHOUT any explicit _cache_evict() call.
+    """
+    from jcodemunch_mcp.storage.sqlite_store import _cache_put, _db_mtime_ns
+    import time
+
+    store = SQLiteIndexStore(base_path=str(tmp_path))
+    safe_name = store._safe_repo_component("cross-proc", "name")
+
+    # Step 1: Initial index — saved and warmed into cache
+    store.save_index(
+        owner="local", name="cross-proc",
+        source_files=["a.py"], symbols=[_make_symbol("f")],
+        raw_files={"a.py": "original"},
+    )
+    idx1 = store.load_index("local", "cross-proc")
+    assert len(idx1.symbols) == 1
+
+    # Capture db_path and the mtime the MCP server cached
+    db_path = store._db_path("local", "cross-proc")
+    old_mtime = _db_mtime_ns(db_path)
+
+    # Step 2: Simulate watcher (separate process) writing new data via incremental_save.
+    # This updates the DB + calls os.utime() → new mtime T' > T.
+    # Sleep long enough that os.utime() produces a visibly different mtime on CI
+    # filesystems (FAT/NTFS have 10ms resolution; Linux ext4 has 1ns but VMs vary).
+    import time
+    time.sleep(0.05)
+    store.incremental_save(
+        owner="local", name="cross-proc",
+        changed_files=[], new_files=["b.py"], deleted_files=[],
+        new_symbols=[_make_symbol("g", file="b.py")],
+        raw_files={"b.py": "new_content"},
+    )
+
+    # Inject a stale cache entry: MCP server process still has old mtime + old index.
+    # This replaces the fresh cache entry that incremental_save just wrote.
+    _cache_put("local", safe_name, old_mtime, idx1)
+
+    # Step 3: load_index() must detect mtime mismatch WITHOUT explicit cache eviction.
+    # _db_mtime_ns() returns T' (new) ≠ old_mtime T → cache miss → fresh load from DB.
+    idx2 = store.load_index("local", "cross-proc")
+    assert idx2 is not None
+    assert len(idx2.symbols) == 2, (
+        "load_index() should detect DB mtime change and reload fresh data "
+        "without explicit cache eviction"
+    )
+    assert any(s["name"] == "g" for s in idx2.symbols)
+
