@@ -199,7 +199,8 @@ class BatchSummarizer(BaseSummarizer):
 
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             if api_key:
-                self.model = os.environ.get("ANTHROPIC_MODEL", self.model)
+                cfg_model = (_config.get("summarizer_model", "") or "").strip()
+                self.model = cfg_model or os.environ.get("ANTHROPIC_MODEL", self.model)
                 base_url = os.environ.get("ANTHROPIC_BASE_URL")
                 kwargs = {"api_key": api_key}
                 if base_url:
@@ -268,7 +269,8 @@ class GeminiBatchSummarizer(BaseSummarizer):
 
             api_key = os.environ.get("GOOGLE_API_KEY")
             if api_key:
-                self.model = os.environ.get("GOOGLE_MODEL", self.model)
+                cfg_model = (_config.get("summarizer_model", "") or "").strip()
+                self.model = cfg_model or os.environ.get("GOOGLE_MODEL", self.model)
                 genai.configure(api_key=api_key)
                 self.client = genai.GenerativeModel(self.model)
         except ImportError:

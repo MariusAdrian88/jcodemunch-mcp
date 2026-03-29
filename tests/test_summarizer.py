@@ -939,3 +939,123 @@ def test_create_summarizer_explicit_true_no_provider_warns_and_autodetects(monke
         result = _create_summarizer()
     assert result is None
     assert "summarizer_provider is not set" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Per-provider model override tests
+# ---------------------------------------------------------------------------
+
+
+def test_anthropic_model_override_via_config():
+    """summarizer_model config takes priority over ANTHROPIC_MODEL env var for Anthropic."""
+    import sys
+
+    mock_anthropic_module = MagicMock()
+    mock_client = MagicMock()
+    mock_anthropic_module.Anthropic.return_value = mock_client
+
+    with patch.dict(sys.modules, {"anthropic": mock_anthropic_module}):
+        with patch.dict(
+            "os.environ",
+            {"ANTHROPIC_API_KEY": "sk-test", "ANTHROPIC_MODEL": "claude-haiku-fallback"},
+            clear=True,
+        ):
+            with patch(
+                "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+                side_effect=lambda k, d=None: "claude-override-model" if k == "summarizer_model" else d,
+            ):
+                from jcodemunch_mcp.summarizer.batch_summarize import BatchSummarizer
+
+                summarizer = BatchSummarizer()
+
+    assert summarizer.model == "claude-override-model"
+    assert summarizer.client is mock_client
+
+
+def test_gemini_model_override_via_config():
+    """summarizer_model config takes priority over GOOGLE_MODEL env var for Gemini."""
+    import sys
+
+    mock_genai_module = MagicMock()
+    mock_genai_model_instance = MagicMock()
+    mock_genai_module.GenerativeModel.return_value = mock_genai_model_instance
+
+    # Build a google package mock that exposes generativeai as an attribute
+    mock_google_pkg = MagicMock()
+    mock_google_pkg.generativeai = mock_genai_module
+
+    with patch.dict(
+        sys.modules,
+        {"google": mock_google_pkg, "google.generativeai": mock_genai_module},
+    ):
+        with patch.dict(
+            "os.environ",
+            {"GOOGLE_API_KEY": "gkey-test", "GOOGLE_MODEL": "gemini-fallback"},
+            clear=True,
+        ):
+            with patch(
+                "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+                side_effect=lambda k, d=None: "gemini-override-model" if k == "summarizer_model" else d,
+            ):
+                from jcodemunch_mcp.summarizer.batch_summarize import GeminiBatchSummarizer
+
+                summarizer = GeminiBatchSummarizer()
+
+    # The client must be the instance created with the override model
+    assert summarizer.model == "gemini-override-model"
+    mock_genai_module.GenerativeModel.assert_called_once_with("gemini-override-model")
+    assert summarizer.client is mock_genai_model_instance
+
+
+def test_openai_model_override_via_config(monkeypatch):
+    """summarizer_model config is applied to _create_summarizer() for the OpenAI provider."""
+    monkeypatch.setenv("OPENAI_API_BASE", "http://localhost:11434/v1")
+    for key in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "MINIMAX_API_KEY", "ZHIPUAI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    with patch(
+        "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+        side_effect=lambda k, d=None: (
+            "auto" if k == "use_ai_summaries"
+            else "my-openai-override" if k == "summarizer_model"
+            else d
+        ),
+    ):
+        s = _create_summarizer()
+
+    assert s is not None
+    assert isinstance(s, OpenAIBatchSummarizer)
+    assert s.model == "my-openai-override"
+
+
+def test_minimax_model_override_via_config(monkeypatch):
+    """summarizer_model config is applied to _create_summarizer() for the MiniMax provider."""
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-test-key")
+    for key in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_BASE", "ZHIPUAI_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    from jcodemunch_mcp import config as _cfg_module
+
+    _sentinel = object()
+    _orig = _cfg_module._GLOBAL_CONFIG.get("allow_remote_summarizer", _sentinel)
+    try:
+        _cfg_module._GLOBAL_CONFIG["allow_remote_summarizer"] = True
+        with patch(
+            "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+            side_effect=lambda k, d=None: (
+                "auto" if k == "use_ai_summaries"
+                else "minimax-m3" if k == "summarizer_model"
+                else True if k == "allow_remote_summarizer"
+                else d
+            ),
+        ):
+            s = _create_summarizer()
+    finally:
+        if _orig is _sentinel:
+            _cfg_module._GLOBAL_CONFIG.pop("allow_remote_summarizer", None)
+        else:
+            _cfg_module._GLOBAL_CONFIG["allow_remote_summarizer"] = _orig
+
+    assert s is not None
+    assert isinstance(s, OpenAIBatchSummarizer)
+    assert s.model == "minimax-m3"
