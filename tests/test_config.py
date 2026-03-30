@@ -169,10 +169,40 @@ class TestConfigDefaults:
         from src.jcodemunch_mcp.config import DEFAULTS
         assert DEFAULTS["languages"] is None
 
-    def test_default_disabled_tools_is_empty(self):
-        """Should default to empty list (all tools enabled)."""
+    def test_default_disabled_tools(self):
+        """Should default to test_summarizer disabled."""
         from src.jcodemunch_mcp.config import DEFAULTS
-        assert DEFAULTS["disabled_tools"] == []
+        assert DEFAULTS["disabled_tools"] == ["test_summarizer"]
+
+    def test_default_strict_timeout_ms(self):
+        """strict_timeout_ms should default to 500ms."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["strict_timeout_ms"] == 500
+        assert CONFIG_TYPES["strict_timeout_ms"] is int
+
+    def test_default_summarizer_provider(self):
+        """summarizer_provider should default to empty string (auto-detect)."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["summarizer_provider"] == ""
+        assert CONFIG_TYPES["summarizer_provider"] is str
+
+    def test_default_embed_model(self):
+        """embed_model should default to empty string (no sentence-transformers model)."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["embed_model"] == ""
+        assert CONFIG_TYPES["embed_model"] is str
+
+    def test_default_summarizer_model(self):
+        """summarizer_model should default to empty string."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["summarizer_model"] == ""
+        assert CONFIG_TYPES["summarizer_model"] is str
+
+    def test_default_use_ai_summaries(self):
+        """use_ai_summaries should default to 'auto'."""
+        from src.jcodemunch_mcp.config import DEFAULTS, CONFIG_TYPES
+        assert DEFAULTS["use_ai_summaries"] == "auto"
+        assert CONFIG_TYPES["use_ai_summaries"] == (bool, str)
 
 
 class TestConfigLoading:
@@ -200,7 +230,7 @@ class TestConfigLoading:
 
         # And defaults should be available
         assert get("max_folder_files") == 2000
-        assert get("use_ai_summaries") is True
+        assert get("use_ai_summaries") == "auto"
 
     def test_missing_file_uses_defaults(self, monkeypatch):
         """Should use defaults when config file doesn't exist."""
@@ -217,7 +247,7 @@ class TestConfigLoading:
             load_config(str(Path(tmpdir) / "nonexistent"))
 
             assert get("max_folder_files") == 2000
-            assert get("use_ai_summaries") is True
+            assert get("use_ai_summaries") == "auto"
 
     def test_loads_valid_config(self, monkeypatch):
         """Should load valid JSONC config."""
@@ -409,7 +439,7 @@ class TestProjectConfig:
             repo_key = str(project_root.resolve())
             assert get("max_folder_files", repo=repo_key) == 5000
             # Non-overridden values should come from global
-            assert get("use_ai_summaries", repo=repo_key) is True
+            assert get("use_ai_summaries", repo=repo_key) is True  # set explicitly in global config
 
 
 class TestConfigGetters:
@@ -1166,6 +1196,108 @@ class TestConfigValidation:
             issues = validate_config(str(missing))
             assert any("not found" in i.lower() for i in issues)
 
+    def test_validate_use_ai_summaries_bool_true_passes(self):
+        """True (bool) should pass use_ai_summaries validation."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": true}')
+            issues = validate_config(str(config_path))
+            assert issues == []
+
+    def test_validate_use_ai_summaries_bool_false_passes(self):
+        """False (bool) should pass use_ai_summaries validation."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": false}')
+            issues = validate_config(str(config_path))
+            assert issues == []
+
+    def test_validate_use_ai_summaries_string_auto_passes(self):
+        """"auto" (str) should pass use_ai_summaries validation."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": "auto"}')
+            issues = validate_config(str(config_path))
+            assert issues == []
+
+    def test_validate_use_ai_summaries_string_true_passes(self):
+        """"true" (str) should pass use_ai_summaries validation."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": "true"}')
+            issues = validate_config(str(config_path))
+            assert issues == []
+
+    def test_validate_use_ai_summaries_string_false_passes(self):
+        """"false" (str) should pass use_ai_summaries validation."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": "false"}')
+            issues = validate_config(str(config_path))
+            assert issues == []
+
+    def test_validate_use_ai_summaries_string_auto_uppercase_passes(self):
+        """"AUTO" (uppercase) should pass use_ai_summaries validation (case-insensitive)."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": "AUTO"}')
+            issues = validate_config(str(config_path))
+            assert issues == []
+
+    def test_validate_use_ai_summaries_string_maybe_rejected(self):
+        """"maybe" should be rejected as invalid use_ai_summaries value."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": "maybe"}')
+            issues = validate_config(str(config_path))
+            assert len(issues) == 1
+            assert "use_ai_summaries" in issues[0]
+            assert "'maybe'" in issues[0]
+            assert '"auto"' in issues[0]
+
+    def test_validate_use_ai_summaries_string_yes_rejected(self):
+        """"yes" should be rejected as invalid use_ai_summaries value."""
+        from src.jcodemunch_mcp.config import validate_config, _GLOBAL_CONFIG
+
+        _GLOBAL_CONFIG.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.jsonc"
+            config_path.write_text('{"use_ai_summaries": "yes"}')
+            issues = validate_config(str(config_path))
+            assert len(issues) == 1
+            assert "use_ai_summaries" in issues[0]
+            assert "'yes'" in issues[0]
+            assert '"auto"' in issues[0]
+
 
 class TestServerConfigCheck:
     """Test that `config --check` validates the config file."""
@@ -1387,6 +1519,26 @@ def test_parse_env_value_list_comma_separated_fallback():
     assert result == ["*.log", "*.tmp"]
 
 
+# ── use_ai_summaries env var preserves string values ──────────────────────────────
+
+
+def test_parse_env_value_use_ai_summaries_preserves_string():
+    """_parse_env_value returns raw string for use_ai_summaries to preserve 'auto'."""
+    from src.jcodemunch_mcp.config import _parse_env_value
+
+    # "auto" must be preserved as a string, not coerced to False by bool parsing
+    assert _parse_env_value("auto", (bool, str), key="use_ai_summaries") == "auto"
+
+    # "true" stored as string — downstream handlers accept both str and bool
+    assert _parse_env_value("true", (bool, str), key="use_ai_summaries") == "true"
+
+    # "false" stored as string
+    assert _parse_env_value("false", (bool, str), key="use_ai_summaries") == "false"
+
+    # Case-insensitive
+    assert _parse_env_value("AUTO", (bool, str), key="use_ai_summaries") == "auto"
+
+
 # ── Comprehensive Config File Edge Case Tests ────────────────────────────────────
 
 
@@ -1534,7 +1686,7 @@ class TestConfigTypeValidation:
     """Test config type validation for all config keys."""
 
     def test_bool_type_mismatch_string_true(self):
-        """String 'true' should be rejected for bool type."""
+        """String 'true' should be rejected for pure bool type."""
         from src.jcodemunch_mcp.config import load_config, get, _GLOBAL_CONFIG
         import logging
 
@@ -1542,11 +1694,11 @@ class TestConfigTypeValidation:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.jsonc"
-            config_path.write_text('{"use_ai_summaries": "true"}')  # String, not bool
+            config_path.write_text('{"context_providers": "true"}')  # String, not bool
 
             load_config(tmpdir)
             # Should fall back to default (True)
-            assert get("use_ai_summaries") is True
+            assert get("context_providers") is True
 
     def test_int_type_mismatch_float(self):
         """Float should be rejected for int type."""
@@ -1588,7 +1740,7 @@ class TestConfigTypeValidation:
 
             load_config(tmpdir)
             # Should fall back to default
-            assert get("disabled_tools") == []
+            assert get("disabled_tools") == ["test_summarizer"]
 
     def test_dict_type_mismatch_list(self):
         """List should be rejected for dict type."""
@@ -1812,7 +1964,7 @@ class TestAllConfigKeys:
         from src.jcodemunch_mcp.config import load_config, get, _GLOBAL_CONFIG
 
         bool_keys = [
-            "use_ai_summaries", "context_providers", "redact_source_root",
+            "context_providers", "redact_source_root",
             "share_savings", "allow_remote_summarizer", "watch"
         ]
 

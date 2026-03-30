@@ -10,6 +10,7 @@ import os
 import time
 from typing import Optional
 
+from .. import config as _config
 from ..storage import IndexStore
 from ._utils import resolve_repo
 
@@ -25,11 +26,11 @@ def _detect_provider() -> Optional[tuple[str, str]]:
     """Return (provider_name, model_name) or None when nothing is configured.
 
     Priority order (first match wins):
-    1. sentence-transformers  — ``JCODEMUNCH_EMBED_MODEL`` env var
+    1. sentence-transformers  — ``embed_model`` config key or ``JCODEMUNCH_EMBED_MODEL`` env var
     2. Gemini                 — ``GOOGLE_API_KEY`` + ``GOOGLE_EMBED_MODEL``
     3. OpenAI                 — ``OPENAI_API_KEY`` + ``OPENAI_EMBED_MODEL``
     """
-    st_model = os.environ.get("JCODEMUNCH_EMBED_MODEL", "").strip()
+    st_model = (_config.get("embed_model", "") or os.environ.get("JCODEMUNCH_EMBED_MODEL", "")).strip()
     if st_model:
         return ("sentence_transformers", st_model)
 

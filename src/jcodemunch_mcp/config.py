@@ -36,6 +36,7 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_STATS_FILE_INTERVAL": "stats_file_interval",
     "JCODEMUNCH_SHARE_SAVINGS": "share_savings",
     "JCODEMUNCH_SUMMARIZER_CONCURRENCY": "summarizer_concurrency",
+    "JCODEMUNCH_SUMMARIZER_MAX_FAILURES": "summarizer_max_failures",
     "JCODEMUNCH_ALLOW_REMOTE_SUMMARIZER": "allow_remote_summarizer",
     "JCODEMUNCH_RATE_LIMIT": "rate_limit",
     "JCODEMUNCH_TRANSPORT": "transport",
@@ -49,6 +50,9 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_WATCH_LOG": "watch_log",
     "JCODEMUNCH_WATCH_PATHS": "watch_paths",
     "JCODEMUNCH_FRESHNESS_MODE": "freshness_mode",
+    "JCODEMUNCH_SUMMARIZER_PROVIDER": "summarizer_provider",
+    "JCODEMUNCH_SUMMARIZER_MODEL": "summarizer_model",
+    "JCODEMUNCH_EMBED_MODEL": "embed_model",
     "JCODEMUNCH_CLAUDE_POLL_INTERVAL": "claude_poll_interval",
     "JCODEMUNCH_LOG_LEVEL": "log_level",
     "JCODEMUNCH_LOG_FILE": "log_file",
@@ -246,7 +250,7 @@ def apply_adaptive_languages(source_root: str, detected: set[str]) -> bool:
     return True
 
 DEFAULTS = {
-    "use_ai_summaries": True,
+    "use_ai_summaries": "auto",
     "trusted_folders": [],
     "trusted_folders_whitelist_mode": True,
     "max_folder_files": 2000,
@@ -262,7 +266,7 @@ DEFAULTS = {
     "meta_fields": [],  # [] = no _meta (token-efficient; set null in config for all fields)
     "languages": None,  # None = all languages
     "languages_adaptive": False,
-    "disabled_tools": [],
+    "disabled_tools": ["test_summarizer"],
     "descriptions": {},
     "transport": "stdio",
     "host": "127.0.0.1",
@@ -276,6 +280,10 @@ DEFAULTS = {
     "watch_log": None,
     "watch_paths": [],
     "freshness_mode": "relaxed",
+    "strict_timeout_ms": 500,
+    "summarizer_provider": "",
+    "summarizer_model": "",
+    "embed_model": "",
     "claude_poll_interval": 5.0,
     "log_level": "WARNING",
     "log_file": None,
@@ -283,12 +291,13 @@ DEFAULTS = {
     "stats_file_interval": 3,
     "share_savings": True,
     "summarizer_concurrency": 4,
+    "summarizer_max_failures": 3,
     "allow_remote_summarizer": False,
     "path_map": "",
 }
 
 CONFIG_TYPES = {
-    "use_ai_summaries": bool,
+    "use_ai_summaries": (bool, str),
     "trusted_folders": list,
     "trusted_folders_whitelist_mode": bool,
     "max_folder_files": int,
@@ -318,6 +327,10 @@ CONFIG_TYPES = {
     "watch_log": (str, type(None)),
     "watch_paths": list,
     "freshness_mode": str,
+    "strict_timeout_ms": int,
+    "summarizer_provider": str,
+    "summarizer_model": str,
+    "embed_model": str,
     "claude_poll_interval": float,
     "log_level": str,
     "log_file": (str, type(None)),
@@ -325,6 +338,7 @@ CONFIG_TYPES = {
     "stats_file_interval": int,
     "share_savings": bool,
     "summarizer_concurrency": int,
+    "summarizer_max_failures": int,
     "allow_remote_summarizer": bool,
     "path_map": str,
     "version": str,
@@ -435,6 +449,12 @@ def _validate_type(key: str, value: Any, expected_type: type | tuple) -> bool:
     """Validate value against expected type."""
     if key == "trusted_folders":
         return isinstance(value, list) and all(isinstance(item, str) for item in value)
+    if key == "use_ai_summaries":
+        if isinstance(value, bool):
+            return True
+        if isinstance(value, str):
+            return value.lower() in {"true", "false", "auto"}
+        return False
     if isinstance(expected_type, tuple):
         return isinstance(value, expected_type)
     return isinstance(value, expected_type)
@@ -525,8 +545,12 @@ def load_config(storage_path: str | None = None) -> None:
     _apply_env_var_fallback(_explicit_keys)
 
 
-def _parse_env_value(value: str, expected_type: type | tuple) -> Any:
+def _parse_env_value(value: str, expected_type: type | tuple, key: str | None = None) -> Any:
     """Parse env var string to expected type."""
+    # use_ai_summaries accepts "auto", "true", "false" as strings;
+    # generic bool parsing would coerce "auto" to False.
+    if key == "use_ai_summaries":
+        return value.strip().lower()
     try:
         if isinstance(expected_type, tuple):
             for t in expected_type:
@@ -603,7 +627,7 @@ def _apply_env_var_fallback(explicit_keys: set[str] | None = None) -> None:
             expected_type = CONFIG_TYPES.get(config_key)
             if expected_type is None:
                 continue
-            parsed = _parse_env_value(env_value, expected_type)  # type: ignore[arg-type]
+            parsed = _parse_env_value(env_value, expected_type, key=config_key)  # type: ignore[arg-type]
             if parsed is not None:
                 _GLOBAL_CONFIG[config_key] = parsed
 
@@ -838,12 +862,18 @@ def validate_config(config_path: str) -> list[str]:
     for key, value in loaded.items():
         if key in CONFIG_TYPES:
             if not _validate_type(key, value, CONFIG_TYPES[key]):
-                expected = CONFIG_TYPES[key]
-                type_name = getattr(expected, "__name__", str(expected))
-                issues.append(
-                    f"Config key '{key}' has invalid type: "
-                    f"expected {type_name}, got {type(value).__name__}"
-                )
+                if key == "use_ai_summaries":
+                    issues.append(
+                        f"Config key 'use_ai_summaries' has invalid value {value!r}: "
+                        f'expected one of: "auto", "true", "false" (or boolean true/false)'
+                    )
+                else:
+                    expected = CONFIG_TYPES[key]
+                    type_name = getattr(expected, "__name__", str(expected))
+                    issues.append(
+                        f"Config key '{key}' has invalid type: "
+                        f"expected {type_name}, got {type(value).__name__}"
+                    )
             elif key == "trusted_folders":
                 for entry in value:
                     if not Path(entry).expanduser().is_absolute():
@@ -898,6 +928,7 @@ def generate_template() -> str:
         "search_symbols",
         "search_text",
         "suggest_queries",
+        "test_summarizer",
     ])
     tools_str = "\n  // ".join(f'"{t}",' for t in all_tools)
 
@@ -926,10 +957,6 @@ def generate_template() -> str:
   "version": "{__version__}",
 
   // === Indexing ===
-  // "use_ai_summaries": true,
-  //   Enable AI-generated symbol summaries (requires ANTHROPIC_API_KEY or GOOGLE_API_KEY).
-  //   Set false/0/no/off to disable globally.
-
   // "trusted_folders": [],
   //   Directories allowed for indexing when whitelist_mode is true.
   //   In whitelist mode (default), only these folders can be indexed.
@@ -1012,8 +1039,12 @@ def generate_template() -> str:
   // Global: tools listed here are removed from the schema entirely.
   // Project: tools listed here are rejected at call_tool() with an
   //   explanatory error (schema is global, can't be changed per-project).
-  // Default: empty (all tools enabled). Uncomment to disable specific tools.
+  // Default: test_summarizer disabled. Uncomment others to disable them.
   "disabled_tools": [
+    // test_summarizer — diagnostic: sends a probe to the AI summarizer and
+    //   reports status (ok, timeout, error, misconfigured, disabled).
+    //   Remove from this list to enable it, then call it from your MCP client.
+    "test_summarizer",
   // {tools_str}
   ],
 
@@ -1065,6 +1096,10 @@ def generate_template() -> str:
   //             Best for interactive use (IDE, chat).
   //   strict  - Blocks queries until fresh index is ready.
   //             Best for automation/CI where consistency matters.
+  // "strict_timeout_ms": 500,
+  //   Maximum milliseconds to block queries waiting for a reindex in strict mode.
+  //   After this timeout the query proceeds with the stale index.
+  //   Only applies when freshness_mode is "strict". Default: 500.
   // "claude_poll_interval": 5.0,
   //   Seconds between polling Claude Code worktrees for changes.
 
@@ -1087,6 +1122,33 @@ def generate_template() -> str:
   // "summarizer_concurrency": 4,
   //   Number of parallel threads for AI summarization.
   //   Higher = faster indexing but more API calls.
+  // "summarizer_max_failures": 3,
+  //   Consecutive batch failures before the AI summarizer gives up and
+  //   falls back to signature summaries for remaining symbols.
+  //   Set 0 to disable the circuit breaker (never stop retrying).
+
+  // === AI Summarizer ===
+  // Controls whether AI is used to generate symbol summaries during indexing.
+  //   "auto"  — auto-detect provider from API key env vars (default behavior)
+  //   true    — use the summarizer_provider and summarizer_model values below
+  //   false   — disable AI summarization entirely (signature fallback only)
+  // "use_ai_summaries": "auto",
+
+  // AI summarizer provider to use when use_ai_summaries is true.
+  // Valid values: "anthropic", "gemini", "openai", "minimax", "glm", "openrouter", "none"
+  // Leave empty ("") to auto-detect from available API keys.
+  // "summarizer_provider": "",
+
+  // Model name to use for the selected summarizer provider.
+  // Leave empty ("") to use the provider's default model.
+  // Examples: "claude-haiku-4-5-20251001" (anthropic), "gemini-2.5-flash-lite" (gemini),
+  //           "gpt-4o-mini" (openai), "minimax-m2.7" (minimax), "glm-5" (glm),
+  //           "meta-llama/llama-3.3-70b-instruct:free" (openrouter)
+  // "summarizer_model": "",
+  // "embed_model": "",
+  //   Sentence-transformers model name for local (free) semantic embeddings.
+  //   Example: "all-MiniLM-L6-v2". Requires sentence-transformers package.
+  //   When set, takes priority over GOOGLE_API_KEY and OPENAI_API_KEY embeddings.
   // "allow_remote_summarizer": false,
   //   Allow remote LLM endpoints for summarization (security risk).
   //   Default false blocks non-local summarization.

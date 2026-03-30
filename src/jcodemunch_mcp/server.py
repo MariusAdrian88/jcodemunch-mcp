@@ -34,6 +34,7 @@ from .tools.find_importers import find_importers
 from .tools.find_references import find_references
 from .tools.check_references import check_references
 from .tools.get_session_stats import get_session_stats
+from .tools.test_summarizer import test_summarizer
 from .tools.get_dependency_graph import get_dependency_graph
 from .tools.get_blast_radius import get_blast_radius
 from .tools.get_symbol_diff import get_symbol_diff
@@ -64,6 +65,7 @@ _EXCLUDED_FROM_STRICT = frozenset({
     "list_repos",
     "resolve_repo",
     "get_session_stats",
+    "test_summarizer",
     "index_repo",
     "index_folder",
     "index_file",
@@ -75,8 +77,17 @@ logger = logging.getLogger(__name__)
 
 
 def _default_use_ai_summaries() -> bool:
-    """Return the default for use_ai_summaries, respecting config (including env var fallback)."""
-    return config_module.get("use_ai_summaries", True)
+    """Return whether AI summarization is enabled, as a bool.
+
+    Collapses the tri-state config value ("auto", True, "true" → True;
+    "false", False, "0", "no", "off" → False) into a simple gate.
+    Note: _create_summarizer() reads the config directly to resolve
+    the "auto" vs. explicit-provider distinction at summarization time.
+    """
+    raw = config_module.get("use_ai_summaries", "auto")
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("false", "0", "no", "off")
 
 
 def _parse_watcher_flag(value: Optional[str]) -> bool:
@@ -692,6 +703,20 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="test_summarizer",
+            description="Verify AI summarizer config and connectivity.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Slow-response threshold in ms.",
+                        "default": 15000,
+                    },
+                },
+            },
+        ),
+        Tool(
             name="get_dependency_graph",
             description="Get the file-level dependency graph for a given file. Traverses import relationships up to 3 hops. Use to understand what a file depends on ('imports'), what depends on it ('importers'), or both. Prerequisite for blast radius analysis.",
             inputSchema={
@@ -1056,7 +1081,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # MUST use asyncio.to_thread — threading.Event.wait() cannot run on the event loop.
         repo_arg = arguments.get("repo")
         if (name not in _EXCLUDED_FROM_STRICT and repo_arg):
-            await asyncio.to_thread(await_freshness_if_strict, repo_arg, timeout_ms=500)
+            strict_ms = config_module.get("strict_timeout_ms", 500)
+            await asyncio.to_thread(await_freshness_if_strict, repo_arg, timeout_ms=strict_ms)
 
         # Project-level tool disabling: check if tool is disabled for this project
         # Global disabled tools are filtered out in list_tools() schema; project-level
@@ -1292,6 +1318,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 functools.partial(
                     get_session_stats,
                     storage_path=storage_path,
+                )
+            )
+        elif name == "test_summarizer":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    test_summarizer,
+                    timeout_ms=arguments.get("timeout_ms", 15000),
                 )
             )
         elif name == "get_dependency_graph":
@@ -1935,11 +1968,16 @@ def _run_config(check: bool = False, init: bool = False) -> None:
         print(f"  Active provider:  {green('GLM-5')}  ({suffix})")
         row("  OPENAI_API_BASE", "https://api.z.ai/api/paas/v4/", "default")
         row("  OPENAI_MODEL", "glm-5", "default")
+    elif provider_name == "openrouter":
+        suffix = "JCODEMUNCH_SUMMARIZER_PROVIDER=openrouter" if provider == "openrouter" else "OPENROUTER_API_KEY set"
+        print(f"  Active provider:  {green('OpenRouter')}  ({suffix})")
+        row("  OPENAI_API_BASE", "https://openrouter.ai/api/v1", "default")
+        row("  OPENAI_MODEL", "meta-llama/llama-3.3-70b-instruct:free", "default")
     elif provider == "none":
         print(f"  Active provider:  {yellow('none')} — explicitly disabled, signature fallback active")
     else:
         print(f"  Active provider:  {yellow('none')} — no API key set, signature fallback active")
-        print(f"  {dim('Set ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_BASE, MINIMAX_API_KEY, or ZHIPUAI_API_KEY to enable')}")
+        print(f"  {dim('Set ANTHROPIC_API_KEY, GOOGLE_API_KEY, OPENAI_API_BASE, MINIMAX_API_KEY, ZHIPUAI_API_KEY, or OPENROUTER_API_KEY to enable')}")
 
     # ── Transport ──────────────────────────────────────────────────────────
     section("Transport")

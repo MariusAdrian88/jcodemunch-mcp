@@ -2,8 +2,9 @@
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -19,8 +20,9 @@ _AUTO_DETECT_ORDER = [
     ("OPENAI_API_BASE", "openai"),
     ("MINIMAX_API_KEY", "minimax"),
     ("ZHIPUAI_API_KEY", "glm"),
+    ("OPENROUTER_API_KEY", "openrouter"),
 ]
-_VALID_PROVIDERS = {"anthropic", "gemini", "openai", "minimax", "glm", "none"}
+_VALID_PROVIDERS = {"anthropic", "gemini", "openai", "minimax", "glm", "openrouter", "none"}
 
 
 def _is_localhost_url(url: str) -> bool:
@@ -78,6 +80,30 @@ class BaseSummarizer:
     model: str = ""
     max_tokens_per_batch: int = 500
     client: object = None
+    _consecutive_failures: int = field(default=0, init=False, repr=False)
+    _circuit_broken: bool = field(default=False, init=False, repr=False)
+    _failure_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
+
+    def _record_success(self) -> None:
+        """Reset consecutive failure counter on a successful batch."""
+        with self._failure_lock:
+            self._consecutive_failures = 0
+
+    def _record_failure(self) -> None:
+        """Increment failure counter; trip circuit breaker if threshold reached."""
+        max_failures = _config.get("summarizer_max_failures", 3)
+        with self._failure_lock:
+            self._consecutive_failures += 1
+            if max_failures > 0 and self._consecutive_failures >= max_failures:
+                if not self._circuit_broken:
+                    logger.warning(
+                        "AI summarizer failed %d consecutive batches — "
+                        "disabling for remaining symbols (signature fallback)",
+                        self._consecutive_failures,
+                    )
+                self._circuit_broken = True
 
     def summarize_batch(
         self, symbols: list[Symbol], batch_size: int = 10
@@ -87,6 +113,8 @@ class BaseSummarizer:
         Only processes symbols that don't already have summaries.
         Uses concurrent requests for throughput (configurable via
         JCODEMUNCH_SUMMARIZER_CONCURRENCY, default 4).
+        Trips a circuit breaker after summarizer_max_failures (default 3)
+        consecutive failures, falling back to signature for all remaining.
         Returns updated symbols.
         """
         if not self.client:
@@ -108,17 +136,26 @@ class BaseSummarizer:
 
         if max_workers <= 1 or len(batches) <= 1:
             for batch in batches:
-                self._summarize_one_batch(batch)
+                self._run_batch(batch)
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(self._summarize_one_batch, batch): batch
+                    executor.submit(self._run_batch, batch): batch
                     for batch in batches
                 }
                 for future in as_completed(futures):
                     future.result()
 
         return symbols
+
+    def _run_batch(self, batch: list[Symbol]) -> None:
+        """Run a single batch with circuit breaker check."""
+        if self._circuit_broken:
+            for sym in batch:
+                if not sym.summary:
+                    sym.summary = signature_fallback(sym)
+            return
+        self._summarize_one_batch(batch)
 
     def _summarize_one_batch(self, batch: list[Symbol]):
         """Summarize one batch of symbols. Override in subclasses."""
@@ -199,7 +236,8 @@ class BatchSummarizer(BaseSummarizer):
 
             api_key = os.environ.get("ANTHROPIC_API_KEY")
             if api_key:
-                self.model = os.environ.get("ANTHROPIC_MODEL", self.model)
+                cfg_model = (_config.get("summarizer_model", "") or "").strip()
+                self.model = cfg_model or os.environ.get("ANTHROPIC_MODEL", self.model)
                 base_url = os.environ.get("ANTHROPIC_BASE_URL")
                 kwargs = {"api_key": api_key}
                 if base_url:
@@ -244,8 +282,11 @@ class BatchSummarizer(BaseSummarizer):
                 else:
                     sym.summary = signature_fallback(sym)
 
+            self._record_success()
+
         except Exception as e:
             logger.warning("AI summarization failed, falling back to signature: %s", e)
+            self._record_failure()
             for sym in batch:
                 if not sym.summary:
                     sym.summary = signature_fallback(sym)
@@ -268,7 +309,8 @@ class GeminiBatchSummarizer(BaseSummarizer):
 
             api_key = os.environ.get("GOOGLE_API_KEY")
             if api_key:
-                self.model = os.environ.get("GOOGLE_MODEL", self.model)
+                cfg_model = (_config.get("summarizer_model", "") or "").strip()
+                self.model = cfg_model or os.environ.get("GOOGLE_MODEL", self.model)
                 genai.configure(api_key=api_key)
                 self.client = genai.GenerativeModel(self.model)
         except ImportError:
@@ -296,8 +338,11 @@ class GeminiBatchSummarizer(BaseSummarizer):
                 else:
                     sym.summary = signature_fallback(sym)
 
+            self._record_success()
+
         except Exception as e:
             logger.warning("AI summarization failed, falling back to signature: %s", e)
+            self._record_failure()
             for sym in batch:
                 if not sym.summary:
                     sym.summary = signature_fallback(sym)
@@ -334,7 +379,10 @@ class OpenAIBatchSummarizer(BaseSummarizer):
                 )
                 self.api_base = None
                 return
-            if not self.api_base or self.api_base == os.environ.get("OPENAI_API_BASE", "").rstrip("/"):
+            cfg_model = (_config.get("summarizer_model", "") or "").strip()
+            if cfg_model:
+                self.model = cfg_model
+            elif not self.api_base or self.api_base == os.environ.get("OPENAI_API_BASE", "").rstrip("/"):
                 self.model = os.environ.get("OPENAI_MODEL", self.model)
             self.max_tokens_per_batch = int(
                 os.environ.get("OPENAI_MAX_TOKENS", str(self.max_tokens_per_batch))
@@ -460,16 +508,74 @@ class OpenAIBatchSummarizer(BaseSummarizer):
                 else:
                     sym.summary = signature_fallback(sym)
 
+            self._record_success()
+
         except Exception as e:
             logger.warning("AI summarization failed, falling back to signature: %s", e)
+            self._record_failure()
             for sym in batch:
                 if not sym.summary:
                     sym.summary = signature_fallback(sym)
 
 
+def get_model_name() -> Optional[str]:
+    """Return the configured summarizer_model override, or None if unset.
+
+    Reads the summarizer_model config key. Returns the stripped value, or None
+    if the key is empty or not set.
+    """
+    val = _config.get("summarizer_model", "")
+    if not val:
+        return None
+    return str(val).strip() or None
+
+
 def _create_summarizer() -> Optional[BaseSummarizer]:
-    """Return the appropriate summarizer based on explicit provider or API keys."""
-    name = get_provider_name()
+    """Return the appropriate summarizer based on tri-state use_ai_summaries + provider config.
+
+    Tri-state semantics for use_ai_summaries:
+    - False / "false" / "0" / "no" / "off": AI disabled — returns None immediately.
+    - True (bool, explicit): use summarizer_provider + summarizer_model from config;
+      falls back to auto-detect if provider is empty/unset.
+    - "auto" / "true" / anything else truthy: auto-detect by env vars (legacy behavior).
+    """
+    raw = _config.get("use_ai_summaries", "auto")
+
+    # Normalize to disabled / explicit / auto
+    if isinstance(raw, bool):
+        disabled = not raw
+        explicit_mode = raw  # True → explicit, False → disabled
+    else:
+        s = str(raw).strip().lower()
+        disabled = s in ("false", "0", "no", "off")
+        explicit_mode = False  # string "true"/"auto" → auto-detect
+
+    if disabled:
+        return None
+
+    model_override = get_model_name()
+
+    if explicit_mode:
+        # Use summarizer_provider from config; fall back to auto-detect if unset
+        explicit_provider = (_config.get("summarizer_provider", "") or "").lower().strip()
+        if explicit_provider == "":
+            logger.warning(
+                "use_ai_summaries is 'true' but summarizer_provider is not set; falling back to auto-detect"
+            )
+            name = get_provider_name()
+        elif explicit_provider not in _VALID_PROVIDERS:
+            logger.warning(
+                "summarizer_provider '%s' is not a valid provider; falling back to auto-detect. "
+                "Valid values: %s",
+                explicit_provider,
+                ", ".join(sorted(_VALID_PROVIDERS - {"none"})),
+            )
+            name = get_provider_name()
+        else:
+            name = None if explicit_provider == "none" else explicit_provider
+    else:
+        name = get_provider_name()
+
     if name == "anthropic":
         s = BatchSummarizer()
         return s if s.client else None
@@ -480,7 +586,7 @@ def _create_summarizer() -> Optional[BaseSummarizer]:
         s = _make_openai_compat(
             api_key=os.environ.get("OPENAI_API_KEY", "local-llm"),
             base_url=os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
-            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            model=model_override or os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         )
         return s if s.client else None
     if name == "minimax":
@@ -488,7 +594,7 @@ def _create_summarizer() -> Optional[BaseSummarizer]:
             s = _make_openai_compat(
                 api_key=os.environ.get("MINIMAX_API_KEY"),
                 base_url="https://api.minimax.io/v1",
-                model="minimax-m2.7",
+                model=model_override or "minimax-m2.7",
             )
         except ValueError:
             return None
@@ -498,7 +604,17 @@ def _create_summarizer() -> Optional[BaseSummarizer]:
             s = _make_openai_compat(
                 api_key=os.environ.get("ZHIPUAI_API_KEY"),
                 base_url="https://api.z.ai/api/paas/v4/",
-                model="glm-5",
+                model=model_override or "glm-5",
+            )
+        except ValueError:
+            return None
+        return s if s.client else None
+    if name == "openrouter":
+        try:
+            s = _make_openai_compat(
+                api_key=os.environ.get("OPENROUTER_API_KEY"),
+                base_url="https://openrouter.ai/api/v1",
+                model=model_override or "meta-llama/llama-3.3-70b-instruct:free",
             )
         except ValueError:
             return None
@@ -509,10 +625,10 @@ def _create_summarizer() -> Optional[BaseSummarizer]:
 def get_provider_name() -> Optional[str]:
     """Return the active summarizer provider name, or None if disabled/unset.
 
-    Priority: explicit JCODEMUNCH_SUMMARIZER_PROVIDER env var > auto-detect by key.
-    Auto-detect order: Anthropic > Gemini > OpenAI-compatible > MiniMax > GLM-5.
+    Priority: summarizer_provider config key > JCODEMUNCH_SUMMARIZER_PROVIDER env var > auto-detect by key.
+    Auto-detect order: Anthropic > Gemini > OpenAI-compatible > MiniMax > GLM-5 > OpenRouter.
     """
-    explicit = os.environ.get("JCODEMUNCH_SUMMARIZER_PROVIDER", "").lower().strip()
+    explicit = (_config.get("summarizer_provider", "") or os.environ.get("JCODEMUNCH_SUMMARIZER_PROVIDER", "")).lower().strip()
     if explicit in _VALID_PROVIDERS:
         return None if explicit == "none" else explicit
 
@@ -566,6 +682,7 @@ def summarize_symbols(symbols: list[Symbol], use_ai: bool = True) -> list[Symbol
       3. OPENAI provider/base                         → OpenAI-compatible endpoint
       4. MINIMAX_API_KEY set or provider=minimax     → MiniMax M2.7
       5. ZHIPUAI_API_KEY set or provider=glm         → GLM-5
+      6. OPENROUTER_API_KEY set or provider=openrouter → OpenRouter
       - None set               → skip to Tier 3
     """
     # Tier 1: Extract from docstrings

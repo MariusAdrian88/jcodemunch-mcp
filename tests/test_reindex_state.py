@@ -211,6 +211,19 @@ class TestFreshnessMode:
         t.join()
         assert elapsed >= 0.03
 
+    def test_await_strict_respects_custom_timeout(self):
+        """A short custom timeout should expire before reindex completes."""
+        set_freshness_mode("strict")
+        mark_reindex_start("test/repo2")
+        t0 = time.monotonic()
+        # Reindex never completes; timeout_ms=50 should expire quickly
+        await_freshness_if_strict("test/repo2", timeout_ms=50)
+        elapsed = time.monotonic() - t0
+        # Should have returned after ~50ms, not blocked indefinitely
+        assert elapsed < 0.5
+        # Cleanup: unblock the event so other tests aren't affected
+        mark_reindex_done("test/repo2")
+
 
 class TestWaitForFreshResult:
     def test_returns_fresh_when_unknown_repo(self):

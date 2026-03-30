@@ -868,3 +868,42 @@ class TestWatcherConfigParams:
         )
         assert kwargs is not None
         assert kwargs["use_ai_summaries"] is False
+
+
+class TestDefaultUseAiSummaries:
+    """Unit tests for _default_use_ai_summaries() tri-state normalization."""
+
+    def _call(self, config_value):
+        from jcodemunch_mcp import server as server_mod
+        from jcodemunch_mcp import config as config_mod
+
+        with patch.object(config_mod, "get", return_value=config_value):
+            return server_mod._default_use_ai_summaries()
+
+    def test_auto_string_maps_to_true(self):
+        """'auto' (new default) normalizes to True."""
+        assert self._call("auto") is True
+
+    def test_true_bool_maps_to_true(self):
+        """True (bool, backward compat) normalizes to True."""
+        assert self._call(True) is True
+
+    def test_false_bool_maps_to_false(self):
+        """False (bool) normalizes to False."""
+        assert self._call(False) is False
+
+    def test_false_string_maps_to_false(self):
+        """'false' (string) normalizes to False."""
+        assert self._call("false") is False
+
+    def test_true_string_maps_to_true(self):
+        """'true' (string) normalizes to True."""
+        assert self._call("true") is True
+
+    def test_zero_string_maps_to_false(self):
+        """'0' string normalizes to False."""
+        assert self._call("0") is False
+
+    def test_off_string_maps_to_false(self):
+        """'off' string normalizes to False."""
+        assert self._call("off") is False
