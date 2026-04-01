@@ -37,6 +37,9 @@ from .tools.get_session_stats import get_session_stats
 from .tools.test_summarizer import test_summarizer
 from .tools.get_dependency_graph import get_dependency_graph
 from .tools.get_blast_radius import get_blast_radius
+from .tools.get_dependency_cycles import get_dependency_cycles
+from .tools.get_coupling_metrics import get_coupling_metrics
+from .tools.get_layer_violations import get_layer_violations
 from .tools.get_call_hierarchy import get_call_hierarchy
 from .tools.get_impact_preview import get_impact_preview
 from .tools.get_symbol_diff import get_symbol_diff
@@ -905,6 +908,77 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_dependency_cycles",
+            description=(
+                "Detect circular import chains in a repository. "
+                "Returns every strongly-connected component (set of files that mutually import "
+                "each other, directly or transitively). Run this to identify architectural "
+                "problems before a refactor, or to understand why a module is hard to test in isolation."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository identifier (owner/repo or just repo name)"
+                    },
+                },
+                "required": ["repo"],
+            },
+        ),
+        Tool(
+            name="get_coupling_metrics",
+            description=(
+                "Return afferent coupling (Ca), efferent coupling (Ce), and instability score "
+                "for a file/module. Ca = files that import this module (dependents). "
+                "Ce = files this module imports (dependencies). "
+                "Instability I = Ce/(Ca+Ce): 0 = stable, 1 = unstable. "
+                "Use to identify fragile modules and guide refactoring priorities."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository identifier (owner/repo or just repo name)"
+                    },
+                    "module_path": {
+                        "type": "string",
+                        "description": "File path within the repo (e.g. 'src/utils.py')"
+                    },
+                },
+                "required": ["repo", "module_path"],
+            },
+        ),
+        Tool(
+            name="get_layer_violations",
+            description=(
+                "Check whether imports respect declared architectural layer boundaries. "
+                "Reports every import that crosses a forbidden layer boundary. "
+                "Layer rules can be passed directly or defined in .jcodemunch.jsonc under "
+                "'architecture.layers'. Use to enforce clean architecture and detect "
+                "dependency-direction violations (e.g. API layer importing DB layer directly)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Repository identifier (owner/repo or just repo name)"
+                    },
+                    "rules": {
+                        "type": "array",
+                        "description": (
+                            "Layer definitions. Each entry: {name, paths: [...], may_not_import: [...]}. "
+                            "If omitted, reads from .jcodemunch.jsonc architecture.layers."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                },
+                "required": ["repo"],
+            },
+        ),
+        Tool(
             name="get_symbol_importance",
             description=(
                 "Return the most architecturally important symbols in a repo, ranked by "
@@ -1473,6 +1547,32 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     get_impact_preview,
                     repo=arguments["repo"],
                     symbol_id=arguments["symbol_id"],
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_dependency_cycles":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_dependency_cycles,
+                    repo=arguments["repo"],
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_coupling_metrics":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_coupling_metrics,
+                    repo=arguments["repo"],
+                    module_path=arguments["module_path"],
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_layer_violations":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_layer_violations,
+                    repo=arguments["repo"],
+                    rules=arguments.get("rules"),
                     storage_path=storage_path,
                 )
             )

@@ -345,6 +345,7 @@ CONFIG_TYPES = {
     "path_map": str,
     "cross_repo_default": bool,
     "version": str,
+    "architecture": dict,
 }
 
 

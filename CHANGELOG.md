@@ -4,6 +4,15 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-04-01
+
+### Added
+- **`get_dependency_cycles()`** — new tool detecting circular import chains in the repository. Uses Kosaraju's algorithm (iterative, no recursion limit) on the file-level import graph. Returns each strongly-connected component (set of files mutually reachable via imports) as a cycle. Useful for finding architectural problems and test-isolation blockers.
+- **`get_coupling_metrics(module_path)`** — new tool returning afferent coupling (Ca, how many files import this module), efferent coupling (Ce, how many files this module imports), instability score I = Ce/(Ca+Ce), and a human-readable `assessment` ("stable" | "neutral" | "unstable" | "isolated"). Identifies fragile modules and guides refactoring priorities.
+- **`get_layer_violations(rules?)`** — new tool validating inter-module imports against declared architectural layer boundaries. Reports every import that crosses a forbidden boundary. Rules can be passed directly or defined in `.jcodemunch.jsonc` under `architecture.layers`. Output includes `file`, `file_layer`, `import_target`, `target_layer`, `rule_violated` per violation.
+- **`architecture` config key** — new `.jcodemunch.jsonc` / global config key (type: dict) for per-project layer definitions. Structure: `{"layers": [{"name": str, "paths": [str], "may_not_import": [str]}]}`. Consumed by `get_layer_violations` when no inline `rules` are provided.
+- **36 new tests** (1527 total, 9 skipped) in `tests/test_architecture_tools.py`.
+
 ## [1.14.0] - 2026-04-01
 
 ### Added
