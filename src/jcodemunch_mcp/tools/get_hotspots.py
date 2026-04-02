@@ -88,7 +88,10 @@ def get_hotspots(
     Returns:
         ``{repo, top_n, days, hotspots, git_available, _meta}``
         Each entry: ``{symbol_id, name, kind, file, line, cyclomatic,
-                       max_nesting, param_count, churn, hotspot_score}``
+                       max_nesting, param_count, churn, hotspot_score,
+                       assessment}``
+        ``assessment`` is ``"low"`` (score ≤ 3), ``"medium"`` (≤ 10),
+        or ``"high"`` (> 10). Allows relay without interpreting the score.
     """
     t0 = time.perf_counter()
 
@@ -128,6 +131,13 @@ def get_hotspots(
 
         hotspot_score = round(cyclomatic * math.log1p(churn), 4)
 
+        if hotspot_score > 10:
+            assessment = "high"
+        elif hotspot_score > 3:
+            assessment = "medium"
+        else:
+            assessment = "low"
+
         candidates.append({
             "symbol_id": sym.get("id", ""),
             "name": sym.get("name", ""),
@@ -139,6 +149,7 @@ def get_hotspots(
             "param_count": sym.get("param_count") or 0,
             "churn": churn,
             "hotspot_score": hotspot_score,
+            "assessment": assessment,
         })
 
     candidates.sort(key=lambda x: -x["hotspot_score"])

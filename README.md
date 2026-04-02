@@ -296,6 +296,31 @@ Project config merges over global config — closest to the work wins.
 
 See the full template for all available keys. Run `jcodemunch-mcp config --init` to generate one.
 
+### Architecture layer enforcement (`architecture.layers`)
+
+Place a `.jcodemunch.jsonc` file at your project root to declare the layers your architecture must respect. `get_layer_violations` will then enforce that imports only flow in the declared direction.
+
+```jsonc
+// .jcodemunch.jsonc — example for a layered Python project
+{
+  "architecture": {
+    "layers": [
+      { "name": "api",      "paths": ["src/routes", "src/controllers"] },
+      { "name": "service",  "paths": ["src/services"] },
+      { "name": "repo",     "paths": ["src/repositories"] },
+      { "name": "db",       "paths": ["src/models", "src/migrations"] }
+    ],
+    "rules": [
+      { "layer": "api",     "may_not_import": ["db"] },
+      { "layer": "service", "may_not_import": ["api"] },
+      { "layer": "repo",    "may_not_import": ["api", "service"] }
+    ]
+  }
+}
+```
+
+Call `get_layer_violations(rules=[...])` directly to pass rules inline — the config file is optional and used as a fallback. When no config is present, `get_layer_violations` infers layers from top-level directory structure.
+
 ### Deprecated env vars (v2.0 will remove)
 
 The following env vars still work but are deprecated. Config file values take priority:

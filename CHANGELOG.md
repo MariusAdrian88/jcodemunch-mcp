@@ -4,6 +4,13 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-04-01
+
+### Added
+- **`assessment` field on `get_hotspots` entries** — each hotspot now includes `assessment: "low" | "medium" | "high"` based on `hotspot_score` thresholds (low ≤ 3, medium ≤ 10, high > 10). Allows an LLM to relay findings directly without interpreting the raw score.
+- **`architecture.layers` documented in README** — the `.jcodemunch.jsonc` reference now includes the full `architecture` block schema with a worked example for a typical layered Python project (api → service → repo → db). Used by `get_layer_violations`.
+- **2 new tests** (1624 total, 7 skipped): `test_assessment_field_present`, `test_high_complexity_no_churn_is_low`.
+
 ## [1.18.0] - 2026-04-01
 
 ### Added

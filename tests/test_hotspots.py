@@ -112,3 +112,19 @@ class TestGetHotspots:
             # Any symbol touched in the commit should have churn >= 0
             for h in result["hotspots"]:
                 assert h["churn"] >= 0
+
+    def test_assessment_field_present(self, tmp_path):
+        repo, store = _build_repo(tmp_path)
+        result = get_hotspots(repo=repo, min_complexity=1, storage_path=store)
+        for h in result["hotspots"]:
+            assert "assessment" in h
+            assert h["assessment"] in ("low", "medium", "high")
+
+    def test_high_complexity_no_churn_is_low(self, tmp_path):
+        # Without git history, churn=0 so hotspot_score = cyclomatic * log(1) = 0
+        # All symbols should be "low" assessment
+        repo, store = _build_repo(tmp_path)
+        result = get_hotspots(repo=repo, min_complexity=1, storage_path=store)
+        if not result.get("git_available"):
+            for h in result["hotspots"]:
+                assert h["assessment"] == "low"
