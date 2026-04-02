@@ -16,7 +16,14 @@ def handle_hook_event(event_type: str, manifest_path: Path = DEFAULT_MANIFEST_PA
         jcodemunch-mcp hook-event create
         jcodemunch-mcp hook-event remove
     """
-    payload = json.load(sys.stdin)
+    try:
+        payload = json.load(sys.stdin)
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: invalid JSON on stdin: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"ERROR: failed to read stdin: {exc}", file=sys.stderr)
+        sys.exit(1)
     worktree_path = payload.get("worktreePath") or payload.get("worktree_path")
     if not worktree_path:
         print("ERROR: no worktreePath in stdin payload", file=sys.stderr)

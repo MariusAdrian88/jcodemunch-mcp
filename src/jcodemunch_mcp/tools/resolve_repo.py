@@ -1,12 +1,16 @@
 """Resolve a filesystem path to its indexed repo identifier."""
 
 import hashlib
+import json
+import logging
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
 from ..storage import IndexStore
+
+logger = logging.getLogger(__name__)
 
 
 def _compute_repo_id(folder_path: Path) -> str:
@@ -116,21 +120,25 @@ def _read_repo_metadata(store: IndexStore, owner: str, name: str) -> dict:
     # Try lightweight sidecar
     meta_path = store.base_path / f"{slug}.meta.json"
     if meta_path.exists():
-        import json
-        with open(meta_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        entry = store._repo_entry_from_data(data)
-        if entry:
-            return entry
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entry = store._repo_entry_from_data(data)
+            if entry:
+                return entry
+        except (json.JSONDecodeError, ValueError):
+            logger.debug("Corrupted sidecar JSON at %s, skipping", meta_path)
 
     # Fall back to full index JSON
     index_path = store._index_path(owner, name)
     if index_path.exists():
-        import json
-        with open(index_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        entry = store._repo_entry_from_data(data)
-        if entry:
-            return entry
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entry = store._repo_entry_from_data(data)
+            if entry:
+                return entry
+        except (json.JSONDecodeError, ValueError):
+            logger.debug("Corrupted index JSON at %s, skipping", index_path)
 
     return {}
