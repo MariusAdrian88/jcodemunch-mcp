@@ -4,6 +4,14 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.21.21] - 2026-04-02
+
+### Changed
+- **`files_to_remove` kept as `set` in `incremental_save` (T8)** — `sqlite_store.py` no longer converts the union of `deleted_files` and `changed_files` to a list. The set is preserved through the function and passed to `_patch_index_from_delta`, making membership tests in the hot path (`in files_to_remove`) O(1) instead of O(n). sqlite3 calls receive `tuple(files_to_remove)`.
+- **Defer `stat()` until after LRU key check in `load_index` (T9)** — `stat()` is now only called when the cache key is already present; cold-start loads skip the pre-load `stat()` syscall entirely. `_CACHE_MAX_SIZE` raised from 16 → 32.
+- **Cap `_REPO_PATH_CACHE` at 512 entries (T23)** — `config.py` trims the oldest entries after each `update()` so the cache cannot grow unbounded in long-running server sessions.
+- **`expanduser()` on startup storage path log (T24)** — all three transport startup log lines (`stdio`, `sse`, `streamable-http`) now call `os.path.expanduser()` on the `CODE_INDEX_PATH` value so the logged path shows the real expanded path on Windows instead of `~/.code-index/`.
+
 ## [1.21.20] - 2026-04-02
 
 ### Added

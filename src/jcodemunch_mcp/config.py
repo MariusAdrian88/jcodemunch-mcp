@@ -678,6 +678,11 @@ def _resolve_repo_key(repo: str) -> str | None:
                 result = resolved
         with _CONFIG_LOCK:
             _REPO_PATH_CACHE.update(updates)
+            # Prevent unbounded growth (evict oldest entries first)
+            if len(_REPO_PATH_CACHE) > 512:
+                excess = len(_REPO_PATH_CACHE) - 512
+                for k in list(_REPO_PATH_CACHE)[:excess]:
+                    del _REPO_PATH_CACHE[k]
         return result
     except Exception:
         pass
