@@ -1324,7 +1324,7 @@ def generate_template() -> str:
   //   Seconds between polling Claude Code worktrees for changes.
   // "worktree_base_path": "",
   //   Absolute path for git worktrees created by hook-event.
-  //   Default: {cwd}/.claude/worktrees/{name} (Claude Code convention).
+  //   Default: <cwd>/.claude/worktrees/<name> (Claude Code convention).
   //   Set to e.g. "~/.claude-worktrees" to store all worktrees centrally.
 
   // === Logging ===
