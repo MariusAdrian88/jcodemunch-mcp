@@ -95,6 +95,30 @@ def get_call_hierarchy(
         depth_reached = max(depth_reached, dr)
 
     elapsed = (time.perf_counter() - start) * 1000
+
+    # Determine methodology based on available data
+    get_callers = getattr(index, "get_callers_by_name", None)
+    callers_by_name = get_callers() if get_callers else None
+    has_call_data = bool(callers_by_name)
+    if has_call_data:
+        methodology = "ast_call_references"
+        confidence = "medium"
+        source = "ast_call_references"
+        tip = (
+            "AST-based: call references extracted from tree-sitter AST during indexing. "
+            "More precise than text heuristic, but still approximate for dynamic dispatch."
+        )
+    else:
+        methodology = "text_heuristic"
+        confidence = "low"
+        source = "text_heuristic"
+        tip = (
+            "Text-heuristic: callers = symbols in importing files that mention this "
+            "name as a word token; callees = imported symbols mentioned in this "
+            "symbol's body. May have false positives for common names or dynamic "
+            "dispatch. Use get_impact_preview for a transitive 'what breaks?' view."
+        )
+
     return {
         "repo": f"{owner}/{name}",
         "symbol": {
@@ -113,14 +137,9 @@ def get_call_hierarchy(
         "callees": callees,
         "_meta": {
             "timing_ms": round(elapsed, 1),
-            "methodology": "text_heuristic",
-            "confidence_level": "low",
-            "source": "text_heuristic",
-            "tip": (
-                "Text-heuristic: callers = symbols in importing files that mention this "
-                "name as a word token; callees = imported symbols mentioned in this "
-                "symbol's body. May have false positives for common names or dynamic "
-                "dispatch. Use get_impact_preview for a transitive 'what breaks?' view."
-            ),
+            "methodology": methodology,
+            "confidence_level": confidence,
+            "source": source,
+            "tip": tip,
         },
     }

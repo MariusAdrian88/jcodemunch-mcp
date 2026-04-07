@@ -204,6 +204,9 @@ def _node_to_dict(node) -> dict:
         "line": node.symbol.line,
     }
 
+    if node.symbol.decorators:
+        result["decorators"] = node.symbol.decorators
+
     if node.children:
         result["children"] = [_node_to_dict(c) for c in node.children]
 

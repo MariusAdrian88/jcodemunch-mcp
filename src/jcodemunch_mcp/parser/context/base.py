@@ -193,19 +193,32 @@ def enrich_symbols(symbols: list, providers: list[ContextProvider]) -> None:
     if not providers:
         return
 
+    # Pre-compute file contexts once per unique file per provider
+    # to avoid O(symbols × providers) redundant lookups.
+    unique_files = {sym.file for sym in symbols}
+    file_ctx_cache: dict[tuple[str, str], tuple[str, list[str]]] = {}
+    for provider in providers:
+        pname = provider.name
+        for fpath in unique_files:
+            ctx = provider.get_file_context(fpath)
+            if ctx is not None:
+                summary = ctx.summary_context(max_properties=8)
+                kw = ctx.search_keywords()
+                if summary or kw:
+                    file_ctx_cache[(pname, fpath)] = (summary, kw)
+
     for sym in symbols:
         context_parts = []
         for provider in providers:
-            ctx = provider.get_file_context(sym.file)
-            if ctx is not None:
-                summary = ctx.summary_context(max_properties=8)
-                if summary:
-                    context_parts.append(f'{provider.name}: {summary}')
-                # Merge keywords
-                kw = ctx.search_keywords()
-                if kw:
-                    existing = set(sym.keywords)
-                    sym.keywords.extend(k for k in kw if k not in existing)
+            cached = file_ctx_cache.get((provider.name, sym.file))
+            if cached is None:
+                continue
+            summary, kw = cached
+            if summary:
+                context_parts.append(f'{provider.name}: {summary}')
+            if kw:
+                existing = set(sym.keywords)
+                sym.keywords.extend(k for k in kw if k not in existing)
 
         if context_parts:
             sym.ecosystem_context = "; ".join(context_parts)

@@ -128,6 +128,121 @@ _REACT_SPA = FrameworkProfile(
     high_value_paths=["src/"],
 )
 
+# Flask profile
+_FLASK = FrameworkProfile(
+    name="flask",
+    ignore_patterns=["venv/", ".venv/", "env/", "__pycache__/", "*.pyc", ".git/"],
+    entry_point_patterns=["app.py", "main.py", "run.py", "*.py"],
+    layer_definitions=[
+        Layer("routes",     ["routes/", "*.py"]),
+        Layer("models",    ["models/"]),
+        Layer("templates", ["templates/"]),
+        Layer("static",    ["static/"]),
+    ],
+    high_value_paths=["app.py", "routes/", "models/"],
+)
+
+# FastAPI profile
+_FASTAPI = FrameworkProfile(
+    name="fastapi",
+    ignore_patterns=["venv/", ".venv/", "env/", "__pycache__/", "*.pyc", ".git/"],
+    entry_point_patterns=["main.py", "app.py", "*.py"],
+    layer_definitions=[
+        Layer("routers",   ["routers/", "api/"]),
+        Layer("models",   ["models/", "schemas/"]),
+        Layer("schemas",  ["schemas/"]),
+    ],
+    high_value_paths=["main.py", "app.py", "routers/", "models/"],
+)
+
+# Django profile
+_DJANGO = FrameworkProfile(
+    name="django",
+    ignore_patterns=["venv/", ".venv/", "env/", "__pycache__/", "*.pyc", ".git/", "migrations/"],
+    entry_point_patterns=["manage.py", "settings.py", "urls.py", "wsgi.py", "asgi.py"],
+    layer_definitions=[
+        Layer("views",     ["*/views.py"]),
+        Layer("models",    ["*/models.py"]),
+        Layer("urls",      ["*/urls.py"]),
+        Layer("migrations",["*/migrations/"]),
+        Layer("templates", ["templates/"]),
+        Layer("static",    ["static/"]),
+    ],
+    high_value_paths=["views.py", "models.py", "urls.py", "settings.py"],
+)
+
+# Express/Fastify profile
+_EXPRESS = FrameworkProfile(
+    name="express",
+    ignore_patterns=["node_modules/", "dist/", "build/", ".next/", ".nuxt/", "coverage/"],
+    entry_point_patterns=["app.js", "server.js", "index.js", "src/index.ts", "src/index.js"],
+    layer_definitions=[
+        Layer("routes",    ["routes/", "src/routes/"]),
+        Layer("middleware", ["middleware/", "src/middleware/"]),
+        Layer("controllers",["controllers/", "src/controllers/"]),
+        Layer("models",     ["models/", "src/models/"]),
+    ],
+    high_value_paths=["app.js", "routes/", "middleware/", "controllers/"],
+)
+
+# Spring Boot profile
+_SPRING_BOOT = FrameworkProfile(
+    name="spring-boot",
+    ignore_patterns=["target/", "build/", ".gradle/", ".git/", "src/test/"],
+    entry_point_patterns=["src/main/java/**/*.java", "src/main/kotlin/**/*.kt"],
+    layer_definitions=[
+        Layer("controllers", ["src/main/java/**/controller/"]),
+        Layer("services",    ["src/main/java/**/service/"]),
+        Layer("repos",      ["src/main/java/**/repository/"]),
+        Layer("models",     ["src/main/java/**/model/", "src/main/java/**/entity/"]),
+    ],
+    high_value_paths=["src/main/java/", "src/main/resources/"],
+)
+
+# NestJS profile
+_NESTJS = FrameworkProfile(
+    name="nestjs",
+    ignore_patterns=["node_modules/", "dist/", ".next/", ".nuxt/", "coverage/"],
+    entry_point_patterns=["src/main.ts", "src/app.module.ts"],
+    layer_definitions=[
+        Layer("controllers", ["src/**/*controller.ts"]),
+        Layer("services",   ["src/**/*service.ts"]),
+        Layer("modules",   ["src/**/*.module.ts"]),
+        Layer("guards",    ["src/**/*guard.ts"]),
+    ],
+    high_value_paths=["src/", "modules/", "controllers/", "services/"],
+)
+
+# Gin (Go) profile
+_GIN = FrameworkProfile(
+    name="gin",
+    ignore_patterns=["vendor/", "testdata/", ".git/", "bin/"],
+    entry_point_patterns=["cmd/", "main.go", "internal/"],
+    layer_definitions=[
+        Layer("handlers",  ["internal/handler/", "internal/controllers/"]),
+        Layer("services",   ["internal/service/"]),
+        Layer("repos",     ["internal/repository/", "internal/models/"]),
+        Layer("middleware", ["internal/middleware/"]),
+    ],
+    high_value_paths=["cmd/", "internal/", "main.go"],
+)
+
+# Rails profile
+_RAILS = FrameworkProfile(
+    name="rails",
+    ignore_patterns=["vendor/", "node_modules/", "tmp/", "log/", "storage/", ".git/"],
+    entry_point_patterns=["config/routes.rb", "config/application.rb", "config/environment.rb"],
+    layer_definitions=[
+        Layer("controllers", ["app/controllers/"]),
+        Layer("models",      ["app/models/"]),
+        Layer("views",      ["app/views/"]),
+        Layer("helpers",    ["app/helpers/"]),
+        Layer("channels",   ["app/channels/"]),
+        Layer("jobs",       ["app/jobs/"]),
+    ],
+    high_value_paths=["app/controllers/", "app/models/", "config/routes.rb"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Detection logic
@@ -145,6 +260,52 @@ def _composer_requires(folder: Path) -> str:
         return ""
 
 
+def _has_requirements(folder: Path) -> str:
+    """Return the content of requirements.txt if it exists."""
+    req = folder / "requirements.txt"
+    if req.exists():
+        try:
+            return req.read_text("utf-8", errors="replace")
+        except Exception:
+            pass
+    return ""
+
+
+def _has_pyproject_deps(folder: Path) -> str:
+    """Return content of pyproject.toml project dependencies section."""
+    pyproject = folder / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            content = pyproject.read_text("utf-8", errors="replace")
+            # Simple check for django/fastapi/flask
+            return content
+        except Exception:
+            pass
+    return ""
+
+
+def _has_go_mod(folder: Path) -> str:
+    """Return content of go.mod if it exists."""
+    go_mod = folder / "go.mod"
+    if go_mod.exists():
+        try:
+            return go_mod.read_text("utf-8", errors="replace")
+        except Exception:
+            pass
+    return ""
+
+
+def _has_package_json(folder: Path) -> dict:
+    """Return parsed package.json if it exists."""
+    pkg = folder / "package.json"
+    if pkg.exists():
+        try:
+            return json.loads(pkg.read_text("utf-8", errors="replace"))
+        except Exception:
+            pass
+    return {}
+
+
 def detect_framework(folder_path: Path) -> Optional[FrameworkProfile]:
     """Detect the primary framework in *folder_path* and return a FrameworkProfile.
 
@@ -152,19 +313,70 @@ def detect_framework(folder_path: Path) -> Optional[FrameworkProfile]:
     cheap file-existence checks in priority order — only the first match is
     returned.
     """
-    # Laravel (must precede generic PHP)
+    # 1. Laravel (must precede generic PHP)
     if _has_file(folder_path, "artisan"):
         requires = _composer_requires(folder_path)
         if "laravel/framework" in requires:
             logger.info("Framework profile detected: laravel")
             return _LARAVEL
 
-    # Nuxt.js
+    # 2. Django (manage.py + django dependency)
+    if _has_file(folder_path, "manage.py"):
+        requires = _has_requirements(folder_path)
+        pyproject = _has_pyproject_deps(folder_path)
+        if "django" in requires.lower() or "django" in pyproject.lower():
+            logger.info("Framework profile detected: django")
+            return _DJANGO
+
+    # 3. Spring Boot (build.gradle + spring-boot OR pom.xml + spring-boot)
+    if (_has_file(folder_path, "build.gradle") or _has_file(folder_path, "pom.xml")):
+        gradle = folder_path / "build.gradle"
+        if gradle.exists():
+            try:
+                content = gradle.read_text("utf-8", errors="replace")
+                if "org.springframework.boot" in content:
+                    logger.info("Framework profile detected: spring-boot")
+                    return _SPRING_BOOT
+            except Exception:
+                pass
+        pom = folder_path / "pom.xml"
+        if pom.exists():
+            try:
+                content = pom.read_text("utf-8", errors="replace")
+                if "spring-boot" in content.lower():
+                    logger.info("Framework profile detected: spring-boot")
+                    return _SPRING_BOOT
+            except Exception:
+                pass
+
+    # 4. Rails (Gemfile + rails gem AND config/routes.rb)
+    if _has_file(folder_path, "config", "routes.rb"):
+        gemfile = folder_path / "Gemfile"
+        if gemfile.exists():
+            try:
+                content = gemfile.read_text("utf-8", errors="replace")
+                if "gem 'rails'" in content or 'gem "rails"' in content:
+                    logger.info("Framework profile detected: rails")
+                    return _RAILS
+            except Exception:
+                pass
+
+    # 5. NestJS (package.json + @nestjs/core)
+    pkg = _has_package_json(folder_path)
+    if pkg:
+        deps = {}
+        deps.update(pkg.get("dependencies", {}))
+        deps.update(pkg.get("devDependencies", {}))
+        if "@nestjs/core" in deps:
+            logger.info("Framework profile detected: nestjs")
+            return _NESTJS
+
+    # 6. Nuxt.js
     if _has_file(folder_path, "nuxt.config.ts") or _has_file(folder_path, "nuxt.config.js"):
         logger.info("Framework profile detected: nuxt")
         return _NUXT
 
-    # Next.js
+    # 7. Next.js
     if (
         _has_file(folder_path, "next.config.js")
         or _has_file(folder_path, "next.config.ts")
@@ -173,7 +385,45 @@ def detect_framework(folder_path: Path) -> Optional[FrameworkProfile]:
         logger.info("Framework profile detected: next")
         return _NEXT
 
-    # Vue SPA (vite + App.vue, no Nuxt marker)
+    # 8. Express/Fastify/Hono/Koa (package.json + express/fastify/hono/koa)
+    if pkg:
+        deps = {}
+        deps.update(pkg.get("dependencies", {}))
+        deps.update(pkg.get("devDependencies", {}))
+        for fw in ("express", "fastify", "hono"):
+            if fw in deps:
+                logger.info("Framework profile detected: %s", fw)
+                return _EXPRESS
+        # Koa with koa-router
+        if "koa" in deps and ("@koa/router" in deps or "koa-router" in deps):
+            logger.info("Framework profile detected: express (koa)")
+            return _EXPRESS
+
+    # 9. Flask (requirements.txt/pyproject.toml + flask, but NOT fastapi)
+    requires = _has_requirements(folder_path)
+    pyproject = _has_pyproject_deps(folder_path)
+    if ("flask" in requires.lower() or "flask" in pyproject.lower()) and \
+       not ("fastapi" in requires.lower() or "fastapi" in pyproject.lower()):
+        logger.info("Framework profile detected: flask")
+        return _FLASK
+
+    # 10. FastAPI (requirements.txt/pyproject.toml + fastapi)
+    if "fastapi" in requires.lower() or "fastapi" in pyproject.lower():
+        logger.info("Framework profile detected: fastapi")
+        return _FASTAPI
+
+    # 11. Gin/Chi/Echo/Fiber (go.mod)
+    go_mod = _has_go_mod(folder_path)
+    if go_mod:
+        for fw, module in [("gin", "github.com/gin-gonic/gin"),
+                           ("chi", "github.com/go-chi/chi"),
+                           ("echo", "github.com/labstack/echo"),
+                           ("fiber", "github.com/gofiber/fiber")]:
+            if module in go_mod:
+                logger.info("Framework profile detected: %s", fw)
+                return _GIN  # Use Gin profile for all Go frameworks
+
+    # 12. Vue SPA (vite + App.vue, no Nuxt marker)
     if _has_file(folder_path, "vite.config.ts") or _has_file(folder_path, "vite.config.js"):
         if _has_file(folder_path, "src", "App.vue"):
             logger.info("Framework profile detected: vue-spa")

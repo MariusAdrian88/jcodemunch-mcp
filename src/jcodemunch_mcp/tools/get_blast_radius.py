@@ -78,6 +78,7 @@ def get_blast_radius(
     cross_repo: Optional[bool] = None,
     call_depth: int = 0,
     fqn: Optional[str] = None,
+    decorator_filter: Optional[str] = None,
 ) -> dict:
     """Find all files that would be affected if a symbol's signature or behaviour changed.
 
@@ -96,6 +97,9 @@ def get_blast_radius(
         call_depth: Call-graph hops for caller detection (0 = disabled; max 3).
                     When > 0, adds a ``callers`` list of calling symbols with depth scores.
         storage_path: Custom storage path.
+        decorator_filter: Optional case-insensitive substring filter. When set,
+            only confirmed files containing a symbol with a matching decorator
+            are returned (e.g. ``"route"`` matches ``@route('/users')``).
 
     Returns:
         Dict with symbol info, confirmed/potential affected files, counts, and _meta.
@@ -189,6 +193,20 @@ def get_blast_radius(
 
     confirmed.sort(key=lambda x: x["file"])
     potential.sort(key=lambda x: x["file"])
+
+    # Post-filter by decorator: keep only confirmed files that contain a symbol with the matching decorator
+    if decorator_filter:
+        filtered_confirmed = []
+        for entry in confirmed:
+            imp_file = entry["file"]
+            # Check if any symbol in this file has the matching decorator
+            file_symbols = [s for s in index.symbols if s.get("file") == imp_file]
+            if any(
+                any(decorator_filter.lower() in d.lower() for d in (s.get("decorators") or []))
+                for s in file_symbols
+            ):
+                filtered_confirmed.append(entry)
+        confirmed = filtered_confirmed
 
     # Cross-repo: find other repos that import this repo's package
     cross_repo_confirmed: list[dict] = []

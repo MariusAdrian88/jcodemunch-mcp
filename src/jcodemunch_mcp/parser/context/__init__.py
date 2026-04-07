@@ -11,6 +11,11 @@ from . import git_blame  # noqa: F401
 from . import laravel  # noqa: F401
 from . import nuxt  # noqa: F401
 from . import nextjs  # noqa: F401
+from . import decorator_routes  # noqa: F401  (Flask, FastAPI, Spring Boot, NestJS, ASP.NET)
+from . import express  # noqa: F401  (Express, Fastify, Hono, Koa)
+from . import go_routers  # noqa: F401  (Gin, Chi, Echo, Fiber)
+from . import django  # noqa: F401
+from . import rails  # noqa: F401
 
 __all__ = [
     "ContextProvider",

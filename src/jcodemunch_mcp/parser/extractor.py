@@ -1,12 +1,206 @@
 """Generic AST symbol extractor using tree-sitter."""
 
+import bisect
 import re
-from typing import Optional
+from typing import Any, Optional
 from tree_sitter_language_pack import get_parser
 
 from .symbols import Symbol, make_symbol_id, compute_content_hash
 from .languages import LanguageSpec, LANGUAGE_REGISTRY
 from .complexity import compute_complexity
+
+
+# Node types that represent function/call expressions per language.
+# These are used to extract call_references from the AST.
+_CALL_NODE_TYPES: dict[str, set[str]] = {
+    "python": {"call"},
+    "javascript": {"call_expression"},
+    "typescript": {"call_expression"},
+    "tsx": {"call_expression"},
+    "go": {"call_expression"},
+    "rust": {"call_expression"},
+    "java": {"method_invocation"},
+    "php": {"function_call_expression", "method_call_expression", "scoped_call_expression"},
+    "ruby": {"call", "method_call"},
+    "csharp": {"invocation_expression"},
+    "kotlin": {"call_expression"},
+    "dart": {"function_expression_invocation"},
+    "swift": {"call_expression"},
+    # Constructor calls (new Foo())
+    "javascript": {"call_expression", "new_expression"},
+    "typescript": {"call_expression", "new_expression"},
+    "tsx": {"call_expression", "new_expression"},
+    "java": {"method_invocation", "object_creation_expression"},
+}
+
+
+def _extract_call_name(node, source_bytes: bytes) -> Optional[str]:
+    """Extract the function/method name from a call node.
+
+    Handles:
+    - Simple identifier: foo() -> "foo"
+    - Member expression: obj.method() -> "method"
+    - Constructor: new Foo() -> "Foo"
+    - Return None for complex computed calls.
+    """
+    node_type = node.type
+
+    if node_type == "identifier":
+        # Simple call: foo()
+        return node.text.decode("utf-8", errors="replace")
+
+    if node_type in ("call_expression", "function_call_expression", "method_invocation",
+                      "invocation_expression", "call", "method_call", "function_expression_invocation",
+                      "new_expression", "object_creation_expression"):
+        # For call_expression, the function being called is the first child
+        # For Python call: foo() -> the "foo" is the first child (an identifier)
+        # For JS call_expression: the function is first child (could be identifier or member expression)
+        first_child = None
+        for child in node.children:
+            if child.type not in ("(", ")", "[", "]"):
+                first_child = child
+                break
+
+        if first_child is None:
+            return None
+
+        ft = first_child.type
+        if ft == "identifier":
+            return first_child.text.decode("utf-8", errors="replace")
+        elif ft in ("member_expression", "attribute_expression", "attribute", "method_declaration"):
+            # For JS/TS: member_expression contains property_identifier for the method name
+            # For Python: attribute node contains two identifiers (object and method)
+            # First check for property_identifier (JS/TS way)
+            for child in first_child.children:
+                if child.type == "property_identifier":
+                    return child.text.decode("utf-8", errors="replace")
+            # Fallback: for Python attribute, get the last identifier (method name)
+            identifiers = [c for c in first_child.children if c.type == "identifier"]
+            if identifiers:
+                return identifiers[-1].text.decode("utf-8", errors="replace")
+        elif ft == "call_expression":
+            # Nested call: foo()(bar) - extract foo's name
+            return _extract_call_name(first_child, source_bytes)
+        else:
+            # Could be a parenthesized expression or other complex case
+            # Try to find an identifier within
+            for child in first_child.children:
+                if child.type == "identifier":
+                    return child.text.decode("utf-8", errors="replace")
+
+    return None
+
+
+def _collect_calls(
+    node,
+    call_types: set[str],
+    source_bytes: bytes,
+    results: list[tuple[int, str]],
+) -> None:
+    """Iteratively walk AST collecting call nodes using explicit stack.
+
+    Uses an explicit stack to avoid Python's recursion limit on deeply
+    nested or generated code.
+
+    Args:
+        node: Current AST node (used as the initial stack entry)
+        call_types: Set of node type names that represent calls
+        source_bytes: Source bytes for decoding text
+        results: Out list of (byte_offset, called_name) tuples
+    """
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in call_types:
+            name = _extract_call_name(current, source_bytes)
+            if name:
+                results.append((current.start_byte, name))
+        # Extend with all children at once (push in reverse for pre-order)
+        stack.extend(reversed(current.children))
+
+
+def _find_enclosing_symbol(
+    sorted_syms: list[tuple[int, int, int, Symbol]],
+    byte_offset: int,
+) -> Optional[Symbol]:
+    """Find the symbol that contains the given byte offset.
+
+    Does a linear scan backwards from the binary-search candidate
+    to find the innermost enclosing symbol.
+
+    Args:
+        sorted_syms: List of (byte_offset, byte_end, line, symbol) sorted by byte_offset
+        byte_offset: Byte offset to find enclosing symbol for
+
+    Returns:
+        The Symbol that contains this byte offset, or None
+    """
+    if not sorted_syms:
+        return None
+
+    # Binary search for the last symbol whose start <= byte_offset
+    starts = [s[0] for s in sorted_syms]
+    idx = bisect.bisect_right(starts, byte_offset) - 1
+
+    # Scan backwards to find the innermost enclosing symbol
+    while idx >= 0:
+        start, end, line, sym = sorted_syms[idx]
+        if start <= byte_offset <= end:
+            return sym
+        idx -= 1
+
+    return None
+
+
+def _attribute_calls_to_symbols(
+    symbols: list[Symbol],
+    calls: list[tuple[int, str]],
+) -> None:
+    """Attribute pre-collected call sites to their enclosing symbols.
+
+    This is the cheap second step after call sites have been collected
+    (either during ``_walk_tree`` or via ``_collect_calls``).
+    Only builds the sorted symbol list and does bisect lookups — no AST walk.
+    """
+    if not calls:
+        return
+
+    callable_syms = [
+        (s.byte_offset, s.byte_offset + s.byte_length, s.line, s)
+        for s in symbols
+        if s.kind in ("function", "method") and s.byte_offset >= 0
+    ]
+    callable_syms.sort(key=lambda x: x[0])
+
+    if not callable_syms:
+        return
+
+    for call_offset, called_name in calls:
+        enclosing = _find_enclosing_symbol(callable_syms, call_offset)
+        if enclosing and enclosing.name != called_name:
+            if called_name not in enclosing.call_references:
+                enclosing.call_references.append(called_name)
+
+
+def _extract_call_references(
+    root_node,
+    symbols: list[Symbol],
+    source_bytes: bytes,
+    language: str,
+) -> None:
+    """Extract call references via a standalone AST walk (for custom parsers).
+
+    Used by custom parsers (C++, Elixir, etc.) that don't go through
+    ``_parse_with_spec`` / ``_walk_tree``.  The generic path uses
+    ``_walk_tree(call_types=..., calls=...)`` instead to avoid a second walk.
+    """
+    call_types = _CALL_NODE_TYPES.get(language)
+    if not call_types:
+        return
+
+    calls: list[tuple[int, str]] = []
+    _collect_calls(root_node, call_types, source_bytes, calls)
+    _attribute_calls_to_symbols(symbols, calls)
 
 
 def parse_file(content: str, filename: str, language: str, source_bytes: Optional[bytes] = None, repo: Optional[str] = None) -> list[Symbol]:
@@ -40,8 +234,11 @@ def parse_file(content: str, filename: str, language: str, source_bytes: Optiona
     if source_bytes is None:
         source_bytes = content.encode("utf-8")
 
+    # Track the tree for call reference extraction (custom parsers may return it)
+    root_node: Any = None
+
     if language == "cpp":
-        symbols = _parse_cpp_symbols(source_bytes, filename)
+        symbols, root_node = _parse_cpp_symbols(source_bytes, filename)
     elif language == "elixir":
         symbols = _parse_elixir_symbols(source_bytes, filename)
     elif language == "blade":
@@ -103,16 +300,15 @@ def parse_file(content: str, filename: str, language: str, source_bytes: Optiona
     else:
         spec = LANGUAGE_REGISTRY[language]
         symbols = _parse_with_spec(source_bytes, filename, language, spec)
+        # _parse_with_spec calls _extract_call_references internally
+        root_node = None  # already handled inside _parse_with_spec
 
-    # Disambiguate overloaded symbols (same ID)
-    symbols = _disambiguate_overloads(symbols)
+    # Extract call references for custom parsers that created a tree
+    if root_node is not None:
+        _extract_call_references(root_node, symbols, source_bytes, language)
 
-    # Compute complexity metrics for callable symbols
-    _CALLABLE_KINDS = frozenset({"function", "method"})
-    for sym in symbols:
-        if sym.kind in _CALLABLE_KINDS and sym.byte_length > 0:
-            body = source_bytes[sym.byte_offset:sym.byte_offset + sym.byte_length].decode("utf-8", errors="replace")
-            sym.cyclomatic, sym.max_nesting, sym.param_count = compute_complexity(body, sym.signature)
+    # Disambiguate overloaded symbols + compute complexity in a single pass
+    symbols = _disambiguate_and_compute_complexity(symbols, source_bytes)
 
     return symbols
 
@@ -131,18 +327,33 @@ def _parse_with_spec(
         return []
 
     symbols: list[Symbol] = []
-    _walk_tree(tree.root_node, spec, source_bytes, filename, language, symbols, None)
+
+    # Collect call sites during the same walk as symbol extraction (single pass).
+    ct = _CALL_NODE_TYPES.get(language)
+    calls: list[tuple[int, str]] = [] if ct else []
+    _walk_tree(tree.root_node, spec, source_bytes, filename, language, symbols, None,
+               call_types=ct, calls=calls if ct else None)
+
+    # Attribute collected call sites to enclosing symbols (cheap — no AST walk)
+    if calls:
+        _attribute_calls_to_symbols(symbols, calls)
+
     return symbols
 
 
-def _parse_cpp_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
-    """Parse C++ and auto-fallback to C for `.h` files with no C++ symbols."""
+def _parse_cpp_symbols(source_bytes: bytes, filename: str) -> tuple[list[Symbol], Any]:
+    """Parse C++ and auto-fallback to C for `.h` files with no C++ symbols.
+
+    Returns (symbols, root_node) tuple so parse_file can call _extract_call_references.
+    """
     cpp_spec = LANGUAGE_REGISTRY["cpp"]
     cpp_symbols: list[Symbol] = []
     cpp_error_nodes = 0
+    cpp_tree: Any = None
     try:
         parser = get_parser(cpp_spec.ts_language)
         tree = parser.parse(source_bytes)
+        cpp_tree = tree
         cpp_error_nodes = _count_error_nodes(tree.root_node)
         _walk_tree(tree.root_node, cpp_spec, source_bytes, filename, "cpp", cpp_symbols, None)
     except Exception:
@@ -150,48 +361,50 @@ def _parse_cpp_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
 
     # Non-headers are always C++.
     if not filename.lower().endswith(".h"):
-        return cpp_symbols
+        return cpp_symbols, cpp_tree
 
     # Header auto-detection: parse both C++ and C, prefer better parse quality.
     c_spec = LANGUAGE_REGISTRY.get("c")
     if not c_spec:
-        return cpp_symbols
+        return cpp_symbols, cpp_tree
 
     c_symbols: list[Symbol] = []
     c_error_nodes = 10**9
+    c_tree: Any = None
     try:
         c_parser = get_parser(c_spec.ts_language)
-        c_tree = c_parser.parse(source_bytes)
-        c_error_nodes = _count_error_nodes(c_tree.root_node)
-        _walk_tree(c_tree.root_node, c_spec, source_bytes, filename, "c", c_symbols, None)
+        c_tree_obj = c_parser.parse(source_bytes)
+        c_tree = c_tree_obj
+        c_error_nodes = _count_error_nodes(c_tree_obj.root_node)
+        _walk_tree(c_tree_obj.root_node, c_spec, source_bytes, filename, "c", c_symbols, None)
     except Exception:
         c_error_nodes = 10**9
 
     # If only one parser yields symbols, use that parser's symbols.
     if cpp_symbols and not c_symbols:
-        return cpp_symbols
+        return cpp_symbols, cpp_tree
     if c_symbols and not cpp_symbols:
-        return c_symbols
+        return c_symbols, c_tree
     if not cpp_symbols and not c_symbols:
-        return cpp_symbols
+        return cpp_symbols, cpp_tree
 
     # Both yielded symbols: choose fewer parse errors first, then richer symbol output.
     if c_error_nodes < cpp_error_nodes:
-        return c_symbols
+        return c_symbols, c_tree
     if cpp_error_nodes < c_error_nodes:
-        return cpp_symbols
+        return cpp_symbols, cpp_tree
 
     # Same error quality: use lexical signal to break ties for `.h`.
     if _looks_like_cpp_header(source_bytes):
         if len(cpp_symbols) >= len(c_symbols):
-            return cpp_symbols
+            return cpp_symbols, cpp_tree
     else:
-        return c_symbols
+        return c_symbols, c_tree
 
     if len(c_symbols) > len(cpp_symbols):
-        return c_symbols
+        return c_symbols, c_tree
 
-    return cpp_symbols
+    return cpp_symbols, cpp_tree
 
 
 def _walk_tree(
@@ -204,8 +417,14 @@ def _walk_tree(
     parent_symbol: Optional[Symbol] = None,
     scope_parts: Optional[list[str]] = None,
     class_scope_depth: int = 0,
+    call_types: Optional[set[str]] = None,
+    calls: Optional[list] = None,
 ):
-    """Recursively walk the AST and extract symbols."""
+    """Recursively walk the AST and extract symbols.
+
+    When *call_types* and *calls* are provided, also collects call sites
+    (byte_offset, called_name) in a single pass — no second AST walk needed.
+    """
     # Dart: function_signature inside method_signature is handled by method_signature
     if node.type == "function_signature" and node.parent and node.parent.type == "method_signature":
         return
@@ -219,6 +438,12 @@ def _walk_tree(
         ns_name = _extract_cpp_namespace_name(node, source_bytes)
         if ns_name:
             local_scope_parts = [*local_scope_parts, ns_name]
+
+    # Collect call sites during the same walk (when enabled)
+    if call_types is not None and calls is not None and node.type in call_types:
+        name = _extract_call_name(node, source_bytes)
+        if name:
+            calls.append((node.start_byte, name))
 
     # Check if this node is a symbol
     if node.type in spec.symbol_node_types:
@@ -269,6 +494,8 @@ def _walk_tree(
             next_parent,
             local_scope_parts,
             next_class_scope_depth,
+            call_types,
+            calls,
         )
 
 
@@ -1428,6 +1655,45 @@ def _disambiguate_overloads(symbols: list[Symbol]) -> list[Symbol]:
             sym.id = f"{sym.id}~{ordinals[sym.id]}"
         result.append(sym)
     return result
+
+
+_CALLABLE_KINDS = frozenset({"function", "method"})
+
+
+def _disambiguate_and_compute_complexity(
+    symbols: list[Symbol], source_bytes: bytes
+) -> list[Symbol]:
+    """Disambiguate overloads + compute complexity in a single pass.
+
+    Merges two formerly separate O(N) passes into one to reduce overhead.
+    """
+    # Quick check for duplicates using a set (faster than Counter for common case)
+    seen_ids: set[str] = set()
+    has_duplicates = False
+    for sym in symbols:
+        if sym.id in seen_ids:
+            has_duplicates = True
+            break
+        seen_ids.add(sym.id)
+
+    # Single pass: disambiguate (if needed) + compute complexity
+    ordinals: dict[str, int] = {}
+    if has_duplicates:
+        from collections import Counter
+        id_counts = Counter(s.id for s in symbols)
+        duplicated = {sid for sid, count in id_counts.items() if count > 1}
+
+    result = []
+    for sym in symbols:
+        if has_duplicates and sym.id in duplicated:
+            ordinals[sym.id] = ordinals.get(sym.id, 0) + 1
+            sym.id = f"{sym.id}~{ordinals[sym.id]}"
+        if sym.kind in _CALLABLE_KINDS and sym.byte_length > 0:
+            body = source_bytes[sym.byte_offset:sym.byte_offset + sym.byte_length].decode("utf-8", errors="replace")
+            sym.cyclomatic, sym.max_nesting, sym.param_count = compute_complexity(body, sym.signature)
+        result.append(sym)
+
+    return result if has_duplicates else symbols
 
 
 # ---------------------------------------------------------------------------

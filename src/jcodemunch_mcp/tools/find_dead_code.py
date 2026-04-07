@@ -10,6 +10,7 @@ from typing import Optional
 from ..storage import IndexStore
 from ..parser.imports import resolve_specifier
 from ._utils import resolve_repo
+from ..parser.context._route_utils import ENTRY_POINT_DECORATOR_RE
 
 
 # ---------------------------------------------------------------------------
@@ -30,19 +31,6 @@ _ENTRY_POINT_FILENAMES = frozenset({
     "celery.py",
     "Makefile",
 })
-
-# Decorator patterns indicating a symbol is an entry point (won't be dead)
-_ENTRY_POINT_DECORATOR_RE = re.compile(
-    r"@(?:app|router|blueprint|api|bp|flask_app)\."
-    r"(?:route|get|post|put|delete|patch|head|options|websocket|before_request|after_request)"
-    r"|@pytest\.fixture"
-    r"|@(?:cli|app)\.command"
-    r"|@(?:celery|huey|dramatiq|rq)\."
-    r"|@task\b"
-    r"|@event_handler\b"
-    r"|@on_event\b",
-    re.IGNORECASE,
-)
 
 _MAIN_GUARD_RE = re.compile(r'if\s+__name__\s*==\s*["\']__main__["\']')
 

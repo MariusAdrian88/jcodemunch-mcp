@@ -130,6 +130,32 @@ def get_impact_preview(
         by_file[entry["file"]].append(entry)
 
     elapsed = (time.perf_counter() - start) * 1000
+
+    # Determine methodology based on available data
+    get_callers = getattr(index, "get_callers_by_name", None)
+    callers_by_name = get_callers() if get_callers else None
+    has_call_data = bool(callers_by_name)
+    if has_call_data:
+        methodology = "ast_call_references"
+        confidence = "medium"
+        source = "ast_call_references"
+        tip = (
+            "AST-based: shows every symbol that transitively calls this one via stored "
+            "call references. More precise than text heuristic. "
+            "call_chain = [target_id, intermediate..., caller_id]. "
+            "Use get_call_hierarchy for a structured caller/callee tree."
+        )
+    else:
+        methodology = "text_heuristic"
+        confidence = "low"
+        source = "text_heuristic"
+        tip = (
+            "Text-heuristic: shows every symbol that transitively calls this one "
+            "via word-token matching. May have false positives for common names. "
+            "call_chain = [target_id, intermediate..., caller_id]. "
+            "Use get_call_hierarchy for a structured caller/callee tree."
+        )
+
     return {
         "repo": f"{owner}/{name}",
         "symbol": {
@@ -155,14 +181,9 @@ def get_impact_preview(
         ],
         "_meta": {
             "timing_ms": round(elapsed, 1),
-            "methodology": "text_heuristic",
-            "confidence_level": "low",
-            "source": "text_heuristic",
-            "tip": (
-                "Text-heuristic: shows every symbol that transitively calls this one "
-                "via word-token matching. May have false positives for common names. "
-                "call_chain = [target_id, intermediate..., caller_id]. "
-                "Use get_call_hierarchy for a structured caller/callee tree."
-            ),
+            "methodology": methodology,
+            "confidence_level": confidence,
+            "source": source,
+            "tip": tip,
         },
     }

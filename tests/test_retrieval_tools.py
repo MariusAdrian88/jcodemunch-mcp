@@ -352,3 +352,72 @@ def test_get_file_outline_both_params_raises(tmp_path):
             file_paths=["src/a.py"],
             storage_path=str(tmp_path / "idx"),
         )
+
+
+def test_get_file_outline_decorated_function_has_decorators(tmp_path):
+    """get_file_outline should surface decorators for decorated symbols."""
+    src = tmp_path / "src"
+    src.mkdir()
+    # Create a file with both decorated and undecorated functions
+    (src / "props.py").write_text('''
+@property
+def foo():
+    """A decorated property."""
+    return 42
+
+def bar():
+    """An undecorated function."""
+    pass
+''')
+    idx = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+    repo = idx["repo"]
+
+    from jcodemunch_mcp.tools.get_file_outline import get_file_outline
+    result = get_file_outline(repo=repo, file_path="src/props.py", storage_path=str(tmp_path / "idx"))
+
+    assert "symbols" in result
+    symbols = {s["name"]: s for s in result["symbols"]}
+
+    # foo is decorated with @property
+    assert "foo" in symbols
+    assert "decorators" in symbols["foo"], "Decorated function should have decorators field"
+    assert "@property" in symbols["foo"]["decorators"]
+
+    # bar is undecorated
+    assert "bar" in symbols
+    assert "decorators" not in symbols["bar"], "Undecorated function should not have decorators field"
+
+
+def test_search_symbols_result_includes_decorators(tmp_path):
+    """search_symbols results should include decorators for decorated symbols."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "decorators.py").write_text('''
+@staticmethod
+def helper():
+    """A static helper."""
+    pass
+
+def plain():
+    """A plain function."""
+    pass
+''')
+    idx = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+    repo = idx["repo"]
+
+    from jcodemunch_mcp.tools.search_symbols import search_symbols
+
+    # Search for helper (decorated)
+    result = search_symbols(repo=repo, query="helper", detail_level="standard",
+                            storage_path=str(tmp_path / "idx"))
+    assert result.get("result_count", 0) > 0
+    found = result["results"][0]
+    assert "decorators" in found, "Result for decorated symbol should have decorators"
+    assert "@staticmethod" in found["decorators"]
+
+    # Search for plain (undecorated)
+    result_plain = search_symbols(repo=repo, query="plain", detail_level="standard",
+                                  storage_path=str(tmp_path / "idx"))
+    assert result_plain.get("result_count", 0) > 0
+    found_plain = result_plain["results"][0]
+    assert "decorators" not in found_plain, "Result for undecorated symbol should not have decorators"

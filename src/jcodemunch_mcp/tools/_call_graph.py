@@ -2,8 +2,12 @@
 
 Strategy
 --------
-No call-site data is stored in the index. Callers and callees are derived
-at query time using two heuristics that are already in use elsewhere:
+call_references (v8+): Store call sites in the index. When available,
+use _callers_by_name (caller lookup) and sym.call_references (callee lookup)
+for precise AST-derived call graphs.
+
+Fallback (v7 and earlier): No call-site data is stored in the index. Callers
+and callees are derived at query time using text heuristics:
 
 Callers (who calls symbol X?):
   1. Find files that import X's defining file (import graph, same as blast radius).
@@ -16,9 +20,8 @@ Callees (what does symbol X call?):
   3. Within each imported file, check which indexed symbols' names appear in
      X's body.
 
-Both heuristics are approximate (no type resolution, no dynamic dispatch
+Fallback heuristics are approximate (no type resolution, no dynamic dispatch
 awareness), consistent with the rest of jCodemunch's AST-level analysis.
-Results include a ``source: "ast"`` field so consumers can act accordingly.
 """
 
 from __future__ import annotations
@@ -66,6 +69,126 @@ def build_symbols_by_file(index: "CodeIndex") -> dict[str, list[dict]]:
 # Direct caller / callee finders
 # ---------------------------------------------------------------------------
 
+def _callers_from_references(
+    index: "CodeIndex",
+    sym: dict,
+    reverse_adj: dict[str, list[str]],
+) -> list[dict]:
+    """Return callers using stored call_references data (AST-based).
+
+    Uses the _callers_by_name reverse index (lazy-built on first access).
+    Keyed by (caller_file, called_name) to avoid bare-name collisions between
+    different files (e.g. auth.py::process vs data.py::process).
+    Only returns callers from files that import sym's file (via reverse_adj).
+    """
+    get_callers = getattr(index, "get_callers_by_name", None)
+    callers_by_name = get_callers() if get_callers else None
+    if not callers_by_name:
+        return []
+
+    sym_name: str = sym.get("name", "")
+    sym_file: str = sym.get("file", "")
+    if not sym_name or not sym_file:
+        return []
+
+    # Files that import sym's file
+    importing_files = set(reverse_adj.get(sym_file, []))
+    if not importing_files:
+        return []
+
+    # Look up by (sym_file, sym_name) — all symbols in sym's file that reference sym_name
+    key = (sym_file, sym_name)
+    caller_ids = callers_by_name.get(key, [])
+    sym_id = sym.get("id", "")
+    results: list[dict] = []
+
+    for cid in caller_ids:
+        if cid == sym_id:
+            continue  # Skip self-reference
+        caller = index._symbol_index.get(cid)
+        if caller:
+            caller_file = caller.get("file", "")
+            # Only include callers from files that import sym's file
+            if caller_file and caller_file in importing_files:
+                results.append({
+                    "id": cid,
+                    "name": caller.get("name", ""),
+                    "kind": caller.get("kind", ""),
+                    "file": caller_file,
+                    "line": caller.get("line", 0),
+                })
+    return results
+
+
+def _callees_from_references(
+    index: "CodeIndex",
+    sym: dict,
+    symbols_by_file: dict[str, list[dict]],
+) -> list[dict]:
+    """Return callees using stored call_references data (AST-based).
+
+    Resolves the names in sym.call_references to actual symbol dicts.
+    Uses a name→symbols index for O(1) lookup instead of O(N) scan.
+    """
+    call_refs = sym.get("call_references", [])
+    if not call_refs:
+        return []
+
+    # Build name → list[(name, file_path)] index for O(1) cross-file lookup
+    name_index: dict[str, list[tuple[str, str]]] = {}
+    for file_path, syms in symbols_by_file.items():
+        for s in syms:
+            name = s.get("name", "")
+            if name:
+                name_index.setdefault(name, []).append((name, file_path))
+
+    sym_name = sym.get("name", "")
+    sym_file = sym.get("file", "")
+    seen_ids: set[str] = set()
+    results: list[dict] = []
+
+    for called_name in call_refs:
+        # Skip self-recursion
+        if called_name == sym_name:
+            continue
+        # Look up in the same file first (local calls)
+        if sym_file:
+            for name, file_path in name_index.get(called_name, []):
+                if file_path == sym_file:
+                    cand = symbols_by_file[sym_file]
+                    for s in cand:
+                        if s.get("name") == called_name:
+                            cid = s.get("id", "")
+                            if cid and cid not in seen_ids:
+                                seen_ids.add(cid)
+                                results.append({
+                                    "id": cid,
+                                    "name": called_name,
+                                    "kind": s.get("kind", ""),
+                                    "file": sym_file,
+                                    "line": s.get("line", 0),
+                                })
+                    break
+        # Also look in other files (imported calls)
+        for name, file_path in name_index.get(called_name, []):
+            if file_path != sym_file:
+                for s in symbols_by_file.get(file_path, []):
+                    if s.get("name") == called_name:
+                        cid = s.get("id", "")
+                        if cid and cid not in seen_ids:
+                            seen_ids.add(cid)
+                            results.append({
+                                "id": cid,
+                                "name": called_name,
+                                "kind": s.get("kind", ""),
+                                "file": file_path,
+                                "line": s.get("line", 0),
+                            })
+                        break
+
+    return results
+
+
 def find_direct_callers(
     index: "CodeIndex",
     store: "IndexStore",
@@ -79,13 +202,26 @@ def find_direct_callers(
 
     Each result is ``{id, name, kind, file, line}``.
     """
+    # Try AST-derived call_references first (when available and non-empty)
+    get_callers = getattr(index, "get_callers_by_name", None)
+    callers_by_name = get_callers() if get_callers else None
+    ast_caller_ids: set[str] = set()
+    ast_callers: list[dict] = []
+    if callers_by_name:
+        ast_callers = _callers_from_references(index, sym, reverse_adj)
+        if ast_callers:
+            for c in ast_callers:
+                ast_caller_ids.add(c["id"])
+
+    # Always use text heuristic as fallback/补充 (handles partial AST data)
     sym_name: str = sym.get("name", "")
     sym_file: str = sym.get("file", "")
     if not sym_name or not sym_file:
-        return []
+        return [{"id": c["id"], "name": c["name"], "kind": c["kind"],
+                 "file": c["file"], "line": c["line"]} for c in ast_callers] if ast_caller_ids else []
 
     callers: list[dict] = []
-    seen_ids: set[str] = set()
+    seen_ids: set[str] = set(ast_caller_ids)
 
     for imp_file in reverse_adj.get(sym_file, []):
         file_content = store.get_file_content(owner, repo_name, imp_file)
@@ -126,6 +262,12 @@ def find_direct_callees(
 
     Each result is ``{id, name, kind, file, line}``.
     """
+    # Fast path: use AST-derived call_references if available
+    call_refs = sym.get("call_references", [])
+    if call_refs:
+        return _callees_from_references(index, sym, symbols_by_file)
+
+    # Fallback: text heuristic
     from ..parser.imports import resolve_specifier
 
     sym_file: str = sym.get("file", "")

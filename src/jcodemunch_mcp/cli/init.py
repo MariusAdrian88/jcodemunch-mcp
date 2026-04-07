@@ -26,7 +26,8 @@ Always use jCodemunch-MCP tools for code navigation. Never fall back to Read, Gr
 2. `suggest_queries` — when the repo is unfamiliar
 
 **Finding code:**
-- symbol by name → `search_symbols` (add `kind=`, `language=`, `file_pattern=` to narrow)
+- symbol by name → `search_symbols` (add `kind=`, `language=`, `file_pattern=`, `decorator=` to narrow)
+- decorator-aware queries → `search_symbols(decorator="X")` to find symbols with a specific decorator (e.g. `@property`, `@route`); combine with set-difference to find symbols *lacking* a decorator (e.g. "which endpoints lack CSRF protection?")
 - string, comment, config value → `search_text` (supports regex, `context_lines`)
 - database columns (dbt/SQLMesh) → `search_columns`
 

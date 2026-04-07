@@ -22,6 +22,7 @@ from ..storage import IndexStore
 from ..parser.imports import resolve_specifier
 from ._utils import resolve_repo as _resolve_repo
 from ._call_graph import _word_match, build_symbols_by_file
+from ..parser.context._route_utils import ENTRY_POINT_DECORATOR_RE
 
 
 # ---------------------------------------------------------------------------
@@ -38,16 +39,6 @@ _BARREL_FILENAMES = frozenset({
     "__init__.py", "index.ts", "index.js", "index.tsx", "index.jsx",
     "mod.rs",
 })
-
-_ENTRY_POINT_DECORATOR_RE = re.compile(
-    r"@(?:app|router|blueprint|api|bp|flask_app)\."
-    r"(?:route|get|post|put|delete|patch|head|options|websocket|before_request|after_request)"
-    r"|@pytest\.fixture"
-    r"|@(?:cli|app)\.command"
-    r"|@(?:celery|huey|dramatiq|rq)\."
-    r"|@task\b|@event_handler\b|@on_event\b",
-    re.IGNORECASE,
-)
 
 
 def _filename(path: str) -> str:
@@ -157,21 +148,46 @@ def get_dead_code_v2(
     barrel_names = _barrel_exports(index, store, owner, name)
 
     # Pre-compute call graph: for each symbol, who calls it? (Signal 2 input)
-    # Build a map: sym_id → set of caller sym_ids (1-hop only for speed)
-    symbols_by_file = build_symbols_by_file(index)
+    # Use AST call_references when available (O(N)), fall back to text heuristic.
+    get_callers = getattr(index, "get_callers_by_name", None)
+    callers_by_name = get_callers() if get_callers else None
     callee_has_caller: set[str] = set()
-    for sym in index.symbols:
-        if sym.get("kind") not in ("function", "method"):
-            continue
-        sym_file = sym.get("file", "")
-        sym_name = sym.get("name", "")
-        if not sym_name or not sym_file:
-            continue
-        for importer_file in rev.get(sym_file, []):
-            content = store.get_file_content(owner, name, importer_file)
-            if content and _word_match(content, sym_name):
-                callee_has_caller.add(sym["id"])
-                break
+    if callers_by_name:
+        # Fast path: use pre-computed AST call_references index
+        # Any symbol whose name appears as a value in callers_by_name has at least one caller
+        called_names_by_file: dict[str, set[str]] = {}
+        for (caller_file, called_name) in callers_by_name:
+            called_names_by_file.setdefault(caller_file, set()).add(called_name)
+        for sym in index.symbols:
+            if sym.get("kind") not in ("function", "method"):
+                continue
+            sym_file = sym.get("file", "")
+            sym_name = sym.get("name", "")
+            if not sym_name or not sym_file:
+                continue
+            # Check if any importing file has a symbol that calls this name
+            for importer_file in rev.get(sym_file, []):
+                if sym_name in called_names_by_file.get(importer_file, set()):
+                    callee_has_caller.add(sym["id"])
+                    break
+    else:
+        # Fallback: text heuristic with file content caching
+        symbols_by_file = build_symbols_by_file(index)
+        _file_cache: dict[str, str] = {}
+        for sym in index.symbols:
+            if sym.get("kind") not in ("function", "method"):
+                continue
+            sym_file = sym.get("file", "")
+            sym_name = sym.get("name", "")
+            if not sym_name or not sym_file:
+                continue
+            for importer_file in rev.get(sym_file, []):
+                if importer_file not in _file_cache:
+                    _file_cache[importer_file] = store.get_file_content(owner, name, importer_file) or ""
+                content = _file_cache[importer_file]
+                if content and _word_match(content, sym_name):
+                    callee_has_caller.add(sym["id"])
+                    break
 
     dead_symbols: list[dict] = []
     seen_ids: set[str] = set()

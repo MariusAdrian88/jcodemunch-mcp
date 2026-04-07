@@ -587,6 +587,10 @@ def _build_tools_list() -> list[Tool]:
                         "description": "Optional filter by language",
                         "enum": _build_language_enum()
                     },
+                    "decorator": {
+                        "type": "string",
+                        "description": "Optional filter: only return symbols with this decorator (case-insensitive substring match, e.g. 'route', 'property', 'Deprecated')"
+                    },
                     "max_results": {
                         "type": "integer",
                         "description": "Maximum number of results to return (ignored when token_budget is set)",
@@ -1125,6 +1129,10 @@ def _build_tools_list() -> list[Tool]:
                     "fqn": {
                         "type": "string",
                         "description": "PHP fully-qualified class name (e.g. 'App\\Models\\User'). Resolves to symbol via PSR-4. Alternative to symbol."
+                    },
+                    "decorator_filter": {
+                        "type": "string",
+                        "description": "Optional: filter confirmed results to only those containing symbols with this decorator (case-insensitive substring match)"
                     },
                 },
                 "required": ["repo", "symbol"]
@@ -1935,6 +1943,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         kind=kind_filter,
                         file_pattern=arguments.get("file_pattern"),
                         language=arguments.get("language"),
+                        decorator=arguments.get("decorator"),
                         max_results=arguments.get("max_results", 10),
                         token_budget=arguments.get("token_budget"),
                         detail_level=arguments.get("detail_level", "standard"),
@@ -2161,6 +2170,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     cross_repo=arguments.get("cross_repo"),
                     call_depth=arguments.get("call_depth", 0),
                     fqn=arguments.get("fqn"),
+                    decorator_filter=arguments.get("decorator_filter"),
                 )
             )
         elif name == "get_call_hierarchy":
@@ -2438,6 +2448,22 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                                 "scanned_symbols": ne.get("scanned_symbols", 0),
                                 "timestamp": _t.time(),
                             })
+                elif name == "get_ranked_context":
+                    if isinstance(result, dict):
+                        query = arguments.get("query", "")
+                        if query:
+                            items_included = result.get("items_included", 0)
+                            journal.record_search(query, items_included)
+                        ne = result.get("negative_evidence")
+                        if ne and isinstance(ne, dict):
+                            import time as _t
+                            journal.record_negative_evidence({
+                                "query": query,
+                                "repo": arguments.get("repo", ""),
+                                "verdict": ne.get("verdict", ""),
+                                "scanned_symbols": ne.get("scanned_symbols", 0),
+                                "timestamp": _t.time(),
+                            })
             except Exception:
                 logger.debug("Journal recording failed", exc_info=True)
 
@@ -2461,6 +2487,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     meta["turn_budget_remaining"] = budget_info["turn_budget_remaining"]
                     if tb.should_compact():
                         meta["auto_compacted"] = True
+                    # Also promote to top-level for visibility
+                    result["budget_warning"] = budget_info["budget_warning"]
+            elif budget_tokens > 0:
+                # Still record token count for non-dict results (errors, etc.)
+                from .tools.turn_budget import get_turn_budget
+                tb = get_turn_budget()
+                tb.configure(budget_tokens, config_module.get("turn_gap_seconds", 30.0))
+                # Approximate token count for non-dict results
+                tb.record_output(len(json.dumps(result, default=str)) // 4)
         except Exception:
             logger.debug("Turn budget recording failed", exc_info=True)
 

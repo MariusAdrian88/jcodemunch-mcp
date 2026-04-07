@@ -11,6 +11,7 @@ from .search_symbols import (
     _tokenize,
     _compute_bm25,
     _bm25_score,
+    _NEGATIVE_EVIDENCE_THRESHOLD,
     BYTES_PER_TOKEN,
 )
 
@@ -73,6 +74,8 @@ def get_ranked_context(
 
     # BM25 corpus — cached on CodeIndex
     query_terms = _tokenize(query) or [query.lower()]
+    # Guard: empty string in query_terms causes "" to match every filename
+    query_terms = [t for t in query_terms if t]
     cache = index._bm25_cache
     if "idf" not in cache:
         from .search_symbols import _compute_centrality  # noqa: PLC0415
@@ -129,18 +132,38 @@ def get_ranked_context(
 
     if not raw_scores:
         elapsed = (time.perf_counter() - start) * 1000
-        return {
+        # Negative evidence: signal that nothing matched
+        related_existing = [
+            f for f in index.source_files
+            if any(t in f.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                   for t in query_terms)
+        ][:5]
+        ne = {
+            "verdict": "no_implementation_found",
+            "scanned_symbols": len(candidates),
+            "scanned_files": len(index.source_files),
+            "best_match_score": 0.0,
+        }
+        if related_existing:
+            ne["related_existing"] = related_existing
+        result = {
             "context_items": [],
             "total_tokens": 0,
             "budget_tokens": token_budget,
             "items_included": 0,
             "items_considered": 0,
+            "negative_evidence": ne,
+            "\u26a0 warning": (
+                f"No implementation found for '{query[:80]}'. "
+                f"Do not claim this feature exists."
+            ),
             "_meta": {
                 "timing_ms": round(elapsed, 1),
                 "tokens_saved": 0,
                 "total_tokens_saved": 0,
             },
         }
+        return result
 
     # Normalize and compute combined score
     norm_bm25_denom = max_bm25 if max_bm25 > 0 else 1.0
@@ -180,6 +203,36 @@ def get_ranked_context(
         })
         total_tokens += item_tokens
 
+    # Negative evidence for low-confidence or empty results
+    _ne_threshold = _NEGATIVE_EVIDENCE_THRESHOLD
+    try:
+        from .. import config as _cfg
+        _ne_threshold = _cfg.get("negative_evidence_threshold", _NEGATIVE_EVIDENCE_THRESHOLD)
+    except Exception:
+        pass
+
+    negative_evidence = None
+    # For semantic-only mode, BM25 score can legitimately be 0 even with valid
+    # semantic matches — skip the max_bm25 threshold check to avoid false negatives.
+    _check_bm25_threshold = True  # will be overridden below for semantic_only
+    if strategy == "semantic_only":
+        _check_bm25_threshold = False
+    if not context_items or (_check_bm25_threshold and max_bm25 < _ne_threshold):
+        verdict = "no_implementation_found" if not context_items else "low_confidence_matches"
+        related_existing = [
+            f for f in index.source_files
+            if any(t in f.lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                   for t in query_terms)
+        ][:5]
+        negative_evidence = {
+            "verdict": verdict,
+            "scanned_symbols": items_considered,
+            "scanned_files": len(set(s.get("file", "") for _, _, _, s in scored)),
+            "best_match_score": round(max_bm25, 3),
+        }
+        if related_existing:
+            negative_evidence["related_existing"] = related_existing
+
     # Token savings estimate
     raw_bytes = sum(
         index.file_sizes.get(sym.get("file", ""), 0)
@@ -191,7 +244,7 @@ def get_ranked_context(
 
     elapsed = (time.perf_counter() - start) * 1000
 
-    return {
+    result = {
         "context_items": context_items,
         "total_tokens": total_tokens,
         "budget_tokens": token_budget,
@@ -204,3 +257,17 @@ def get_ranked_context(
             **_cost_avoided(tokens_saved, total_saved),
         },
     }
+    if negative_evidence is not None:
+        result["negative_evidence"] = negative_evidence
+        if negative_evidence["verdict"] == "no_implementation_found":
+            result["\u26a0 warning"] = (
+                f"No implementation found for '{query[:80]}'. "
+                f"Do not claim this feature exists."
+            )
+        else:
+            result["\u26a0 warning"] = (
+                f"Low-confidence matches for '{query[:80]}' "
+                f"(best score: {negative_evidence['best_match_score']}). "
+                f"Verify before claiming this feature exists."
+            )
+    return result

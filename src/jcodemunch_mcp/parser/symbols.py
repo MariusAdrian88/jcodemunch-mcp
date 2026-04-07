@@ -29,6 +29,7 @@ class Symbol:
     cyclomatic: int = 0            # McCabe cyclomatic complexity (branch count + 1)
     max_nesting: int = 0           # Max bracket-nesting depth relative to opening brace
     param_count: int = 0           # Number of parameters in the signature
+    call_references: list[str] = field(default_factory=list)  # Called names from AST call_expression nodes
 
 
 

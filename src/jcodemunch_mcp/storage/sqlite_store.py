@@ -245,6 +245,27 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     logger.info("Migrated symbols table from v6 to v7 (added complexity columns)")
 
 
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """Migrate a v7 database to v8: call_references stored in data column as JSON array."""
+    # v7 stored no call_references data; v8 needs it for AST-based call graphs.
+    # We cannot reconstruct call references from the v7 schema without re-parsing sources.
+    # Mark the index as requiring re-index for call graph features.
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        ("index_version", "8"),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        ("call_refs_missing", "1"),
+    )
+    logger.warning(
+        "Migrated v7→v8: call_references were not stored in v7. "
+        "Call graph features (get_call_hierarchy, get_impact_preview, etc.) "
+        "will use text heuristics. Run 'jcodemunch-mcp index-folder' to fully "
+        "re-index and enable AST-based call graphs."
+    )
+
+
 class SQLiteIndexStore:
     """Storage backend using SQLite WAL for code indexes.
 
@@ -307,6 +328,8 @@ class SQLiteIndexStore:
                     _migrate_v5_to_v6(conn)
                 if stored_version < 7:
                     _migrate_v6_to_v7(conn)
+                if stored_version < 8:
+                    _migrate_v7_to_v8(conn)
 
             SQLiteIndexStore._initialized_dbs.add(db_key)
 
@@ -417,7 +440,8 @@ class SQLiteIndexStore:
              "byte_length": s.byte_length, "content_hash": s.content_hash,
              "cyclomatic": getattr(s, "cyclomatic", 0) or 0,
              "max_nesting": getattr(s, "max_nesting", 0) or 0,
-             "param_count": getattr(s, "param_count", 0) or 0}
+             "param_count": getattr(s, "param_count", 0) or 0,
+             "call_references": getattr(s, "call_references", []) or []}
             for s in symbols
         ]
 
@@ -555,6 +579,15 @@ class SQLiteIndexStore:
             file_rows = conn.execute("SELECT * FROM files").fetchall()
 
             index = self._build_index_from_rows(meta, symbol_rows, file_rows, owner, name)
+
+            # Warn if call references were not migrated (v7→v8 case)
+            if meta.get("call_refs_missing") == "1":
+                logger.warning(
+                    "Index %s/%s was migrated from v7 which did not store call references. "
+                    "get_call_hierarchy and get_impact_preview will use text heuristics. "
+                    "Run 'jcodemunch-mcp index-folder' to re-index for AST-based call graphs.",
+                    owner, name,
+                )
         finally:
             conn.close()
 
@@ -1054,7 +1087,8 @@ class SQLiteIndexStore:
     # ── Internal helpers ────────────────────────────────────────────
 
     def _symbol_to_row(self, symbol: Symbol) -> tuple:
-        """Convert a Symbol to a row tuple for INSERT (v7 schema)."""
+        """Convert a Symbol to a row tuple for INSERT (v8 schema)."""
+        call_refs = getattr(symbol, "call_references", []) or []
         return (
             symbol.id, symbol.file, symbol.name, symbol.kind,
             symbol.signature, symbol.summary, symbol.docstring,
@@ -1067,16 +1101,17 @@ class SQLiteIndexStore:
             json.dumps(symbol.keywords) if symbol.keywords else "[]",
             symbol.content_hash,
             getattr(symbol, "ecosystem_context", ""),
-            None,  # data column — no longer used in v5
+            json.dumps(call_refs) if call_refs else None,  # data column — v8: call_references as JSON array
             getattr(symbol, "cyclomatic", 0) or None,
             getattr(symbol, "max_nesting", 0) or None,
             getattr(symbol, "param_count", 0) or None,
         )
 
     def _symbol_dict_to_row(self, d: dict) -> tuple:
-        """Convert a serialized symbol dict to a row tuple for INSERT (v7 schema)."""
+        """Convert a serialized symbol dict to a row tuple for INSERT (v8 schema)."""
         decorators = d.get("decorators", [])
         keywords = d.get("keywords", [])
+        call_refs = d.get("call_references", [])
         return (
             d["id"], d["file"], d["name"], d.get("kind", ""),
             d.get("signature", ""), d.get("summary", ""), d.get("docstring", ""),
@@ -1089,7 +1124,7 @@ class SQLiteIndexStore:
             json.dumps(keywords) if keywords else "[]",
             d.get("content_hash", ""),
             d.get("ecosystem_context", ""),
-            None,  # data column — no longer used in v5
+            json.dumps(call_refs) if call_refs else None,  # data column — v8: call_references as JSON array
             d.get("cyclomatic") or None,
             d.get("max_nesting") or None,
             d.get("param_count") or None,
@@ -1097,14 +1132,19 @@ class SQLiteIndexStore:
 
     def _row_to_symbol_dict(self, row: sqlite3.Row) -> dict:
         """Convert a database row to a symbol dict (matches CodeIndex.symbols format)."""
+        call_references: list[str] = []
         # v5: read directly from columns. Fallback to data JSON for mid-migration rows.
         if row["data"]:
-            # Legacy v4 row (data not yet migrated) — parse JSON
             try:
                 data = json.loads(row["data"])
             except (json.JSONDecodeError, ValueError):
                 logger.warning("Corrupted JSON in symbol data column for row %s, skipping legacy fields", row["name"])
                 data = {}
+            if isinstance(data, list):
+                # v8: data column contains call_references as JSON array
+                call_references = data
+                data = {}
+            # else: legacy v4 row (data is a JSON object)
             qualified_name = data.get("qualified_name", row["name"])
             language = data.get("language", "")
             decorators = data.get("decorators", [])
@@ -1112,7 +1152,7 @@ class SQLiteIndexStore:
             content_hash = data.get("content_hash", "")
             ecosystem_context = data.get("ecosystem_context", "")
         else:
-            # v5 row — direct column reads, no JSON parsing
+            # v5/v6/v7 row — direct column reads, no JSON parsing
             qualified_name = row["qualified_name"] or row["name"]
             language = row["language"] or ""
             deco_raw = row["decorators"]
@@ -1151,6 +1191,7 @@ class SQLiteIndexStore:
             "cyclomatic": row["cyclomatic"] or 0,
             "max_nesting": row["max_nesting"] or 0,
             "param_count": row["param_count"] or 0,
+            "call_references": call_references,
         }
 
     def _symbol_to_dict(self, symbol: "Symbol") -> dict:
@@ -1181,6 +1222,7 @@ class SQLiteIndexStore:
             "cyclomatic": getattr(symbol, "cyclomatic", 0) or 0,
             "max_nesting": getattr(symbol, "max_nesting", 0) or 0,
             "param_count": getattr(symbol, "param_count", 0) or 0,
+            "call_references": getattr(symbol, "call_references", []) or [],
         }
 
     def _patch_index_from_delta(

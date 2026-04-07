@@ -291,6 +291,7 @@ def search_symbols(
     kind: Optional[str] = None,
     file_pattern: Optional[str] = None,
     language: Optional[str] = None,
+    decorator: Optional[str] = None,
     max_results: int = 10,
     token_budget: Optional[int] = None,
     detail_level: str = "standard",
@@ -313,6 +314,7 @@ def search_symbols(
         kind: Optional filter by symbol kind.
         file_pattern: Optional glob pattern to filter files.
         language: Optional filter by language (e.g., "python", "javascript").
+        decorator: Optional filter by decorator (substring match, e.g. 'route', 'property').
         max_results: Maximum results to return (ignored when token_budget is set).
         token_budget: Maximum tokens to consume. Results are greedily packed by
             score until the budget is exhausted. Overrides max_results.
@@ -390,6 +392,7 @@ def search_symbols(
             kind,
             file_pattern,
             language,
+            decorator,
             max_results,
             fuzzy,
             fuzzy_threshold,
@@ -424,6 +427,8 @@ def search_symbols(
 
     # BM25 corpus stats — cached on CodeIndex, computed once per index load
     query_terms = _tokenize(query) or [query.lower()]
+    # Guard: empty string in query_terms causes "" to match every filename
+    query_terms = [t for t in query_terms if t]
     cache = index._bm25_cache
     if "idf" not in cache:
         cache["idf"], cache["avgdl"], cache["inverted"] = _compute_bm25(index.symbols)
@@ -444,7 +449,7 @@ def search_symbols(
             cache["pagerank"] = pr_scores
         pagerank = cache["pagerank"]
 
-    has_filters = bool(kind or file_pattern or language)
+    has_filters = bool(kind or file_pattern or language or decorator)
 
     # Bound the heap size in both modes.
     # token_budget mode: estimate ceiling as budget_bytes / min_symbol_size so the
@@ -475,6 +480,7 @@ def search_symbols(
             kind=kind,
             file_pattern=file_pattern,
             language=language,
+            decorator=decorator,
             max_results=max_results,
             effective_limit=effective_limit,
             token_budget=token_budget,
@@ -514,6 +520,8 @@ def search_symbols(
                 continue
             if language and sym.get("language") != language:
                 continue
+            if decorator and not any(decorator.lower() in d.lower() for d in (sym.get("decorators") or [])):
+                continue
 
         score = _bm25_score(sym, query_terms, idf, avgdl, centrality)
         if score <= 0:
@@ -551,6 +559,9 @@ def search_symbols(
                 "summary": sym.get("summary", ""),
                 "byte_length": sym.get("byte_length", 0),
             }
+        decs = sym.get("decorators") or []
+        if decs:
+            entry["decorators"] = decs
         if debug:
             entry["score"] = round(score, 3)
             entry["score_breakdown"] = _bm25_breakdown(sym, query_terms, idf, avgdl)
@@ -587,6 +598,9 @@ def search_symbols(
         existing_ids = {e["id"] for e in scored_results}
         fuzzy_hits: list[tuple[dict, float, int]] = []
 
+        # Cap fuzzy candidates to avoid O(N) scan on very large repos.
+        # Collect up to 5× max_results candidates, then stop scanning.
+        fuzzy_cap = max_results * 5
         for sym in index.symbols:
             if sym["id"] in existing_ids:
                 continue
@@ -597,6 +611,8 @@ def search_symbols(
                     continue
                 if language and sym.get("language") != language:
                     continue
+                if decorator and not any(decorator.lower() in d.lower() for d in (sym.get("decorators") or [])):
+                    continue
             name_lower = sym.get("name", "").lower()
             name_tris = _trigrams(name_lower)
             union_size = len(query_tris | name_tris)
@@ -605,6 +621,8 @@ def search_symbols(
             if jac < fuzzy_threshold and ed > max_edit_distance:
                 continue
             fuzzy_hits.append((sym, jac, ed))
+            if len(fuzzy_hits) >= fuzzy_cap:
+                break
 
         # Rank: lowest edit distance first, then highest Jaccard as tiebreaker
         fuzzy_hits.sort(key=lambda x: (x[2], -x[1]))
@@ -630,6 +648,9 @@ def search_symbols(
                     "summary": sym.get("summary", ""),
                     "byte_length": sym.get("byte_length", 0),
                 }
+            decs = sym.get("decorators") or []
+            if decs:
+                entry["decorators"] = decs
             entry["match_type"] = "fuzzy"
             entry["fuzzy_similarity"] = round(jac, 3)
             entry["edit_distance"] = ed
@@ -719,6 +740,18 @@ def search_symbols(
     # Feature 1: Add negative_evidence if present
     if negative_evidence is not None:
         result["negative_evidence"] = negative_evidence
+        query_display = query[:80]
+        if negative_evidence["verdict"] == "no_implementation_found":
+            result["\u26a0 warning"] = (
+                f"No implementation found for '{query_display}'. "
+                f"Do not claim this feature exists."
+            )
+        else:
+            result["\u26a0 warning"] = (
+                f"Low-confidence matches for '{query_display}' "
+                f"(best score: {negative_evidence['best_match_score']}). "
+                f"Verify before claiming this feature exists."
+            )
 
     # Feature 5: Cache the result if cacheable
     if _cacheable and _cache_key is not None:
@@ -742,6 +775,7 @@ def _search_symbols_semantic(
     kind: Optional[str],
     file_pattern: Optional[str],
     language: Optional[str],
+    decorator: Optional[str],
     max_results: int,
     effective_limit: int,
     token_budget: Optional[int],
@@ -822,6 +856,7 @@ def _search_symbols_semantic(
     # Pass 1: collect BM25 + cosine for every filtered symbol
     raw: list[tuple[dict, float, float]] = []  # (sym, bm25, cosine)
     max_bm25 = 0.0
+    max_cos = 0.0
 
     for sym in index.symbols:
         if has_filters:
@@ -831,6 +866,8 @@ def _search_symbols_semantic(
                 continue
             if language and sym.get("language") != language:
                 continue
+            if decorator and not any(decorator.lower() in d.lower() for d in (sym.get("decorators") or [])):
+                continue
 
         bm25 = 0.0 if semantic_only else _bm25_score(sym, query_terms, idf, avgdl, centrality)
         if bm25 > max_bm25:
@@ -838,6 +875,8 @@ def _search_symbols_semantic(
 
         sym_vec = all_emb.get(sym["id"])
         cos = _cosine_similarity(query_vec, sym_vec) if sym_vec else 0.0
+        if cos > max_cos:
+            max_cos = cos
 
         raw.append((sym, bm25, cos))
 
@@ -876,6 +915,9 @@ def _search_symbols_semantic(
                 "summary": sym.get("summary", ""),
                 "byte_length": sym.get("byte_length", 0),
             }
+        decs = sym.get("decorators") or []
+        if decs:
+            entry["decorators"] = decs
         if debug:
             entry["score"] = round(score, 4)
         scored_results.append(entry)
@@ -938,7 +980,8 @@ def _search_symbols_semantic(
         "results": scored_results,
         "_meta": meta,
     }
-    if not scored_results or max_bm25 < _ne_threshold:
+    best_score = max_cos if semantic_only else max_bm25
+    if not scored_results or best_score < _ne_threshold:
         # Find files whose names partially match query terms
         query_lower = query.lower()
         related_existing: list[str] = []
@@ -955,9 +998,23 @@ def _search_symbols_semantic(
             "verdict": verdict,
             "scanned_symbols": len(raw),
             "scanned_files": len(seen_files) if seen_files else len(index.source_files),
-            "best_match_score": round(max_bm25, 3) if max_bm25 > 0 else 0.0,
+            "best_match_score": round(best_score, 3) if best_score > 0 else 0.0,
             **({"related_existing": related_existing} if related_existing else {}),
         }
+        # Add warning string alongside negative_evidence
+        query_display = query[:80]
+        if verdict == "no_implementation_found":
+            result["\u26a0 warning"] = (
+                f"No implementation found for '{query_display}'. "
+                f"Do not claim this feature exists."
+            )
+        else:
+            _best = result["negative_evidence"]["best_match_score"]
+            result["\u26a0 warning"] = (
+                f"Low-confidence matches for '{query_display}' "
+                f"(best score: {_best}). "
+                f"Verify before claiming this feature exists."
+            )
 
     return result
 

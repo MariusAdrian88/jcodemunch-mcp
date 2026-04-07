@@ -21,7 +21,7 @@ from .sqlite_store import SQLiteIndexStore, _VERIFIED_PATHS
 logger = logging.getLogger(__name__)
 
 # Bump this when the index schema changes in an incompatible way.
-INDEX_VERSION = 7
+INDEX_VERSION = 8
 
 
 @functools.lru_cache(maxsize=16)
@@ -103,6 +103,8 @@ class CodeIndex:
         self._bm25_cache: dict = {}
         # Lazy import-name inverted index — populated on first find_references call
         self._import_name_index: Optional[dict[str, list[tuple[str, dict]]]] = None
+        # Lazy reverse lookup: built on first access via get_callers_by_name()
+        self._callers_by_name: Optional[dict[tuple[str, str], list[str]]] = None
         # Load tsconfig/jsconfig path aliases from source_root if not already provided
         if not self.alias_map and self.source_root:
             try:
@@ -113,11 +115,27 @@ class CodeIndex:
         # Load PSR-4 namespace map from composer.json if PHP files are present
         if not self.psr4_map and self.source_root:
             try:
-                if any(f.endswith(".php") for f in self.source_files):
+                if "php" in self.languages:
                     from ..parser.imports import build_psr4_map
                     self.psr4_map = build_psr4_map(self.source_root)
             except Exception:
                 pass
+
+    def get_callers_by_name(self) -> dict[tuple[str, str], list[str]]:
+        """Lazy reverse lookup: (caller_file, called_name) -> [symbol IDs].
+
+        Built on first call from AST call_references stored per symbol.
+        Keyed by (caller_file, called_name) to avoid bare-name collisions.
+        """
+        if self._callers_by_name is None:
+            idx: dict[tuple[str, str], list[str]] = {}
+            for s in self.symbols:
+                caller_file = s.get("file", "")
+                for ref in s.get("call_references", []):
+                    if caller_file and ref:
+                        idx.setdefault((caller_file, ref), []).append(s["id"])
+            self._callers_by_name = idx
+        return self._callers_by_name
 
     # Keys added by BM25 caching — must not leak into API responses
     _INTERNAL_KEYS = {"_tokens", "_tf", "_dl"}
@@ -822,6 +840,7 @@ class IndexStore:
             "cyclomatic": getattr(symbol, "cyclomatic", 0) or 0,
             "max_nesting": getattr(symbol, "max_nesting", 0) or 0,
             "param_count": getattr(symbol, "param_count", 0) or 0,
+            "call_references": getattr(symbol, "call_references", []) or [],
         }
 
     def _index_to_dict(self, index: CodeIndex) -> dict:

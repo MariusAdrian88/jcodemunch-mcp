@@ -74,6 +74,8 @@ def plan_turn(
 
     # Tokenize query
     query_terms = _tokenize(query) or [query.lower()]
+    # Guard: empty string in query_terms causes "" to match every filename
+    query_terms = [t for t in query_terms if t]
 
     # Score symbols using inverted index
     candidate_indices: set = set()
@@ -282,4 +284,6 @@ def plan_turn(
         result["insertion_candidates"] = insertion_candidates
     if budget_advisor is not None:
         result["budget_advisor"] = budget_advisor
+    if confidence in ("low", "none"):
+        result["action"] = "STOP_AND_REPORT_GAP"
     return result

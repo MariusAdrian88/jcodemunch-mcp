@@ -72,3 +72,153 @@ class TestNegativeEvidence:
         if result.get("result_count", 0) == 0 or result.get("negative_evidence"):
             ne = result.get("negative_evidence", {})
             assert "verdict" in ne
+
+
+class TestGetRankedContextNegativeEvidence:
+    """Tests for negative_evidence field in get_ranked_context."""
+
+    def test_negative_evidence_on_empty_result(self, tmp_path: Path):
+        """get_ranked_context returns negative_evidence when query doesn't match."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools.get_ranked_context import get_ranked_context
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("def real_function(): pass\n")
+
+        idx = index_folder(path=str(tmp_path), use_ai_summaries=False)
+        repo = idx["repo"]
+        storage = idx.get("storage_path")
+
+        result = get_ranked_context(
+            repo=repo,
+            query="completely_nonexistent_feature_xyz",
+            token_budget=4000,
+            storage_path=storage,
+        )
+
+        assert result["items_included"] == 0
+        assert "negative_evidence" in result
+        assert result["negative_evidence"]["verdict"] == "no_implementation_found"
+        assert result["negative_evidence"]["scanned_symbols"] >= 0
+        assert result["negative_evidence"]["best_match_score"] == 0.0
+
+    def test_warning_string_present_on_negative_evidence(self, tmp_path: Path):
+        """Verify warning string at top level when negative evidence triggers."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools.get_ranked_context import get_ranked_context
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("def real_function(): pass\n")
+
+        idx = index_folder(path=str(tmp_path), use_ai_summaries=False)
+        repo = idx["repo"]
+        storage = idx.get("storage_path")
+
+        result = get_ranked_context(
+            repo=repo,
+            query="nonexistent_xyz",
+            token_budget=4000,
+            storage_path=storage,
+        )
+
+        assert "\u26a0 warning" in result
+        assert "nonexistent_xyz" in result["\u26a0 warning"]
+
+    def test_no_negative_evidence_on_strong_match(self, tmp_path: Path):
+        """No negative_evidence when query matches well."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools.get_ranked_context import get_ranked_context
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("def my_special_function():\n    return 42\n")
+
+        idx = index_folder(path=str(tmp_path), use_ai_summaries=False)
+        repo = idx["repo"]
+        storage = idx.get("storage_path")
+
+        result = get_ranked_context(
+            repo=repo,
+            query="my_special_function",
+            token_budget=4000,
+            storage_path=storage,
+        )
+
+        assert result["items_included"] > 0
+        assert "negative_evidence" not in result
+        assert "\u26a0 warning" not in result
+
+    def test_related_existing_in_negative_evidence(self, tmp_path: Path):
+        """related_existing lists files with partial name match."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools.get_ranked_context import get_ranked_context
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "auth_handler.py").write_text("def login(): pass\n")
+
+        idx = index_folder(path=str(tmp_path), use_ai_summaries=False)
+        repo = idx["repo"]
+        storage = idx.get("storage_path")
+
+        result = get_ranked_context(
+            repo=repo,
+            query="auth_nonexistent_feature",
+            token_budget=4000,
+            storage_path=storage,
+        )
+
+        ne = result.get("negative_evidence", {})
+        # "auth" is in query and in filename "auth_handler.py"
+        if ne.get("related_existing"):
+            assert any("auth" in f for f in ne["related_existing"])
+
+
+class TestSearchSymbolsWarningString:
+    """Tests for warning string alongside negative_evidence in search_symbols."""
+
+    def test_warning_on_negative_evidence(self, tmp_path: Path):
+        """search_symbols includes warning string when negative evidence triggers."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools.search_symbols import search_symbols
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("def real_function(): pass\n")
+
+        idx = index_folder(path=str(tmp_path), use_ai_summaries=False)
+        repo = idx["repo"]
+        storage = idx.get("storage_path")
+
+        result = search_symbols(
+            repo=repo,
+            query="nonexistent_xyz_feature",
+            storage_path=storage,
+        )
+
+        assert "negative_evidence" in result
+        assert "\u26a0 warning" in result
+        assert "nonexistent_xyz" in result["\u26a0 warning"]
+
+    def test_no_warning_on_good_match(self, tmp_path: Path):
+        """No warning string when results are strong."""
+        from jcodemunch_mcp.tools.index_folder import index_folder
+        from jcodemunch_mcp.tools.search_symbols import search_symbols
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.py").write_text("def real_function(): pass\n")
+
+        idx = index_folder(path=str(tmp_path), use_ai_summaries=False)
+        repo = idx["repo"]
+        storage = idx.get("storage_path")
+
+        result = search_symbols(
+            repo=repo,
+            query="real_function",
+            storage_path=storage,
+        )
+
+        assert "\u26a0 warning" not in result

@@ -38,6 +38,7 @@ class TestGetCallHierarchyMeta:
         r = get_call_hierarchy(repo=repo, symbol_id=sid, storage_path=store)
         assert "_meta" in r
         assert "methodology" in r["_meta"]
+        # small_index has no function calls, so falls back to text_heuristic
         assert r["_meta"]["methodology"] == "text_heuristic"
 
     def test_confidence_level_present(self, small_index):
@@ -50,7 +51,7 @@ class TestGetCallHierarchyMeta:
         assert r["_meta"]["confidence_level"] in _VALID_CONFIDENCE
 
     def test_confidence_level_is_low(self, small_index):
-        """Call hierarchy uses text heuristic — must disclose low confidence."""
+        """Call hierarchy with no call data falls back to text heuristic — low confidence."""
         repo, store = small_index["repo"], small_index["store"]
         sid = _first_function_id(repo, store)
         if sid is None:
@@ -71,7 +72,7 @@ class TestGetImpactPreviewMeta:
         result = get_impact_preview(repo=repo, symbol_id=sid, storage_path=store)
         assert "_meta" in result
         assert "methodology" in result["_meta"]
-        assert result["_meta"]["methodology"] == "text_heuristic"
+        assert result["_meta"]["methodology"] == "ast_call_references"
 
     def test_confidence_level_present(self, medium_index):
         repo, store = medium_index["repo"], medium_index["store"]
@@ -83,7 +84,8 @@ class TestGetImpactPreviewMeta:
         result = get_impact_preview(repo=repo, symbol_id=sid, storage_path=store)
         assert result["_meta"]["confidence_level"] in _VALID_CONFIDENCE
 
-    def test_confidence_level_is_low(self, medium_index):
+    def test_confidence_level_is_medium(self, medium_index):
+        """Impact preview uses AST call references — medium confidence."""
         repo, store = medium_index["repo"], medium_index["store"]
         r = search_symbols(repo=repo, query="get_user", max_results=1,
                            detail_level="compact", storage_path=store)
@@ -91,7 +93,7 @@ class TestGetImpactPreviewMeta:
             pytest.skip("no function in index")
         sid = r["results"][0]["id"]
         result = get_impact_preview(repo=repo, symbol_id=sid, storage_path=store)
-        assert result["_meta"]["confidence_level"] == "low"
+        assert result["_meta"]["confidence_level"] == "medium"
 
 
 class TestGetSymbolComplexityMeta:

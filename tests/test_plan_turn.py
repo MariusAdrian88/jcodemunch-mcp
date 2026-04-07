@@ -167,3 +167,38 @@ class TestPlanTurn:
 
         result = plan_turn(repo=repo, query="zzz_totally_fake_query", storage_path=storage_path)
         assert result["confidence"] in ("none", "low")
+
+
+class TestPlanTurnActionField:
+    """Tests for action field in plan_turn on low/none confidence."""
+
+    def test_action_field_on_low_confidence(self, tmp_path: Path):
+        """plan_turn returns action=STOP_AND_REPORT_GAP on low confidence."""
+        from jcodemunch_mcp.tools.plan_turn import plan_turn
+        from tests.conftest_helpers import create_mini_index
+
+        repo, storage_path = create_mini_index(tmp_path)
+
+        result = plan_turn(
+            repo=repo,
+            query="completely_nonexistent_xyz",
+            storage_path=storage_path,
+        )
+
+        assert result["confidence"] in ("low", "none")
+        assert result.get("action") == "STOP_AND_REPORT_GAP"
+
+    def test_no_action_field_on_high_confidence(self, tmp_path: Path):
+        """plan_turn does NOT include action field on high confidence."""
+        from jcodemunch_mcp.tools.plan_turn import plan_turn
+        from tests.conftest_helpers import create_mini_index
+
+        repo, storage_path = create_mini_index(tmp_path)
+
+        result = plan_turn(
+            repo=repo,
+            query="my_func",
+            storage_path=storage_path,
+        )
+
+        assert "action" not in result
