@@ -291,13 +291,13 @@ class TestPreCompact:
     def test_precompact_with_session_data(self, monkeypatch):
         """Populate journal, run hook, verify JSON output has systemMessage."""
         from jcodemunch_mcp.tools.session_journal import get_journal
-        
+
         # Record some session data
         journal = get_journal()
         journal.record_read("src/server.py", "get_file_outline")
         journal.record_search("test_query", 2)
         journal.record_edit("src/test.py")
-        
+
         # Mock the get_session_snapshot function to return predictable data
         def mock_get_session_snapshot(max_files=10, max_searches=5, max_edits=10, include_negative_evidence=True, storage_path=None):
             return {
@@ -305,18 +305,41 @@ class TestPreCompact:
                 "structured": {"files_accessed": [], "key_searches": [], "dead_ends": []},
                 "_meta": {"timing_ms": 1.0}
             }
-        
+
         monkeypatch.setattr(
-            "jcodemunch_mcp.tools.get_session_snapshot.get_session_snapshot", 
+            "jcodemunch_mcp.tools.get_session_snapshot.get_session_snapshot",
             mock_get_session_snapshot
         )
-        
+
         rc, out, _ = _run_with_stdin(run_precompact, '{"hook_event_name": "PreCompact"}')
         assert rc == 0
         assert out != ""
         result = json.loads(out)
         assert "systemMessage" in result
         assert "Session Snapshot" in result["systemMessage"]
+
+    def test_precompact_landmark_enrichment_graceful_on_no_repos(self, monkeypatch):
+        """Landmark enrichment should not crash if no indexed repos exist."""
+        from jcodemunch_mcp.cli.hooks import _build_landmark_section
+        from jcodemunch_mcp.tools.session_journal import get_journal
+
+        journal = get_journal()
+        journal.record_edit("src/nonexistent.py")
+
+        # Mock IndexStore at the storage module level (where it's imported from)
+        MockStore = type("MockStore", (), {
+            "__init__": lambda self, **kw: None,
+            "list_repos": lambda self: [],
+        })
+        monkeypatch.setattr("jcodemunch_mcp.storage.IndexStore", MockStore)
+        result = _build_landmark_section()
+        assert isinstance(result, str)
+
+    def test_precompact_landmark_returns_string(self):
+        """_build_landmark_section must always return a string."""
+        from jcodemunch_mcp.cli.hooks import _build_landmark_section
+        result = _build_landmark_section()
+        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------

@@ -541,3 +541,48 @@ class TestBlastRadiusDecoratorFilter:
         confirmed_files = [c["file"] for c in result["confirmed"]]
         assert any("routes" in f for f in confirmed_files)
         assert any("service" in f for f in confirmed_files)
+
+
+# ---------------------------------------------------------------------------
+# Per-edge resolution tier tests (Gap 2A)
+# ---------------------------------------------------------------------------
+
+class TestResolutionTiers:
+    """Each call-graph edge must carry a 'resolution' field."""
+
+    def test_callers_have_resolution_field(self, tmp_path):
+        repo, store = _build_repo(tmp_path)
+        result = get_call_hierarchy(repo=repo, symbol_id="helper", direction="callers",
+                                    depth=1, storage_path=store)
+        assert "error" not in result
+        for caller in result["callers"]:
+            assert "resolution" in caller, f"Missing 'resolution' on caller: {caller}"
+            assert caller["resolution"] in ("ast_resolved", "ast_inferred", "text_matched")
+
+    def test_callees_have_resolution_field(self, tmp_path):
+        repo, store = _build_repo(tmp_path)
+        result = get_call_hierarchy(repo=repo, symbol_id="process", direction="callees",
+                                    depth=1, storage_path=store)
+        assert "error" not in result
+        for callee in result["callees"]:
+            assert "resolution" in callee, f"Missing 'resolution' on callee: {callee}"
+            assert callee["resolution"] in ("ast_resolved", "ast_inferred", "text_matched")
+
+    def test_meta_includes_resolution_tiers(self, tmp_path):
+        repo, store = _build_repo(tmp_path)
+        result = get_call_hierarchy(repo=repo, symbol_id="helper", storage_path=store)
+        assert "error" not in result
+        assert "resolution_tiers" in result["_meta"]
+        tiers = result["_meta"]["resolution_tiers"]
+        assert isinstance(tiers, dict)
+        # At least one tier should have a count > 0
+        assert sum(tiers.values()) > 0
+
+    def test_deep_traversal_preserves_resolution(self, tmp_path):
+        """Resolution field should survive BFS at depth > 1."""
+        repo, store = _build_repo(tmp_path)
+        result = get_call_hierarchy(repo=repo, symbol_id="helper", direction="callers",
+                                    depth=3, storage_path=store)
+        assert "error" not in result
+        for caller in result["callers"]:
+            assert "resolution" in caller

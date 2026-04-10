@@ -113,6 +113,7 @@ def _callers_from_references(
                         "kind": caller.get("kind", ""),
                         "file": caller_file,
                         "line": caller.get("line", 0),
+                        "resolution": "ast_resolved",
                     })
     return results
 
@@ -164,6 +165,7 @@ def _callees_from_references(
                                     "kind": s.get("kind", ""),
                                     "file": sym_file,
                                     "line": s.get("line", 0),
+                                    "resolution": "ast_resolved",
                                 })
                     break
         # Also look in other files (imported calls)
@@ -180,6 +182,7 @@ def _callees_from_references(
                                 "kind": s.get("kind", ""),
                                 "file": file_path,
                                 "line": s.get("line", 0),
+                                "resolution": "ast_inferred",
                             })
                         break
 
@@ -242,6 +245,7 @@ def find_direct_callers(
                     "kind": candidate.get("kind", ""),
                     "file": imp_file,
                     "line": candidate.get("line", 0),
+                    "resolution": "text_matched",
                 })
 
     return ast_callers + callers
@@ -309,6 +313,7 @@ def find_direct_callees(
                     "kind": candidate.get("kind", ""),
                     "file": imported_file,
                     "line": candidate.get("line", 0),
+                    "resolution": "text_matched",
                 })
 
     return callees

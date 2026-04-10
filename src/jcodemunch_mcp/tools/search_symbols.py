@@ -180,6 +180,40 @@ def _compute_centrality(
     return {f: math.log(1 + c) * _CENTRALITY_WEIGHT for f, c in counts.items()}
 
 
+def _identity_score(sym: dict, query_joined: str) -> float:
+    """Identity channel: exact or prefix match on symbol name/ID.
+
+    Returns a high score for exact matches and a decreasing score for
+    prefix matches by specificity.  Replaces the old ``50.0`` exact-name hack.
+
+    Scoring:
+      - Exact name match          → 50.0
+      - Exact ID match            → 50.0
+      - Name starts with query    → 30.0
+      - ID contains query segment → 20.0
+      - No match                  →  0.0
+    """
+    if not query_joined:
+        return 0.0
+    name_lower = sym.get("name", "").lower()
+    sym_id_lower = sym.get("id", "").lower()
+
+    # Exact match on name or ID
+    if query_joined == name_lower or query_joined == sym_id_lower:
+        return 50.0
+
+    # Prefix match on name (e.g. query "get_sym" matches "get_symbol_source")
+    if name_lower.startswith(query_joined):
+        return 30.0
+
+    # Qualified ID segment match (e.g. query "storage.indexstore" matches
+    # "src/storage/index_store.py::IndexStore")
+    if query_joined in sym_id_lower:
+        return 20.0
+
+    return 0.0
+
+
 def _bm25_score(sym: dict, query_terms: list[str], idf: dict[str, float], avgdl: float,
                 centrality: Optional[dict] = None) -> float:
     """BM25 score for a single symbol.
@@ -191,10 +225,9 @@ def _bm25_score(sym: dict, query_terms: list[str], idf: dict[str, float], avgdl:
     tf_raw = sym["_tf"]
     dl = sym["_dl"]
 
-    # Exact name match bonus so direct lookups still float to the top
-    name_lower = sym.get("name", "").lower()
+    # Identity channel: exact/prefix match on symbol name or ID
     query_joined = " ".join(query_terms)
-    score: float = 50.0 if query_joined == name_lower else 0.0
+    score: float = _identity_score(sym, query_joined)
 
     K = _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / max(avgdl, 1.0))
     for term in set(query_terms):
@@ -242,7 +275,17 @@ def _bm25_breakdown(sym: dict, query_terms: list[str], idf: dict[str, float], av
             if tf > 0 and idf.get(term, 0.0) > 0:
                 field_score += idf[term] * (tf * (_BM25_K1 + 1)) / (tf + K)
         out[fname] = round(field_score, 3)
-    out["name_exact_bonus"] = 50.0 if " ".join(query_terms) == sym.get("name", "").lower() else 0.0
+    query_joined = " ".join(query_terms)
+    identity = _identity_score(sym, query_joined)
+    out["identity"] = identity
+    if identity >= 50.0:
+        out["identity_type"] = "exact"
+    elif identity >= 30.0:
+        out["identity_type"] = "prefix"
+    elif identity >= 20.0:
+        out["identity_type"] = "segment"
+    else:
+        out["identity_type"] = "none"
     return out
 
 

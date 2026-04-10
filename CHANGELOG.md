@@ -2,6 +2,13 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.25.0] — 2026-04-10
+
+### Added
+- **PreCompact structural landmarks** (Gap 4A): `run_precompact()` now enriches the session snapshot with PageRank-ranked top-20 central symbols and recently-changed symbols from the session journal. Gives the LLM a structural "table of contents" that survives context compaction
+- **Per-edge resolution tiers** (Gap 2A): every edge in `get_call_hierarchy` callers/callees now carries a `resolution` field — `ast_resolved` (direct tree-sitter match), `ast_inferred` (resolved via import graph), or `text_matched` (heuristic word-boundary fallback). `_meta.resolution_tiers` summarises the tier distribution
+- **Identity channel in search** (Gap 3 partial): `search_symbols` replaces the old `50.0` exact-name hack with a proper identity scoring channel — exact match (50), prefix match (30), qualified-ID segment match (20). Debug mode (`debug=true`) now reports `identity` score and `identity_type` in the per-field breakdown
+
 ## [1.24.5] — 2026-04-10
 
 ### Added

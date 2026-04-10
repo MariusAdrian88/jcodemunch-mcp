@@ -106,7 +106,9 @@ def get_call_hierarchy(
         source = "ast_call_references"
         tip = (
             "AST-based: call references extracted from tree-sitter AST during indexing. "
-            "More precise than text heuristic, but still approximate for dynamic dispatch."
+            "More precise than text heuristic, but still approximate for dynamic dispatch. "
+            "Each edge has a 'resolution' field: ast_resolved (direct AST match), "
+            "ast_inferred (resolved via import graph), or text_matched (heuristic)."
         )
     else:
         methodology = "text_heuristic"
@@ -118,6 +120,12 @@ def get_call_hierarchy(
             "symbol's body. May have false positives for common names or dynamic "
             "dispatch. Use get_impact_preview for a transitive 'what breaks?' view."
         )
+
+    # Summarize resolution tiers across all edges
+    resolution_counts: dict[str, int] = {}
+    for edge in callers + callees:
+        r = edge.get("resolution", "unknown")
+        resolution_counts[r] = resolution_counts.get(r, 0) + 1
 
     return {
         "repo": f"{owner}/{name}",
@@ -140,6 +148,7 @@ def get_call_hierarchy(
             "methodology": methodology,
             "confidence_level": confidence,
             "source": source,
+            "resolution_tiers": resolution_counts,
             "tip": tip,
         },
     }
