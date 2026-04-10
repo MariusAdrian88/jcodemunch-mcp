@@ -981,7 +981,7 @@ def index_folder(
 
             # ── Optional LSP enrichment (incremental path) ──
             try:
-                from ..enrichment.lsp_bridge import is_lsp_enabled, enrich_call_graph_with_lsp
+                from ..enrichment.lsp_bridge import is_lsp_enabled, enrich_call_graph_with_lsp, enrich_dispatch_edges
                 if is_lsp_enabled(repo=str(folder_path)):
                     lsp_edges = enrich_call_graph_with_lsp(
                         root_path=str(folder_path),
@@ -995,6 +995,19 @@ def index_folder(
                             incr_context_metadata = {}
                         incr_context_metadata["lsp_edges"] = lsp_edges
                         logger.info("LSP enrichment added %d edges (incremental)", len(lsp_edges))
+
+                    dispatch_edges = enrich_dispatch_edges(
+                        root_path=str(folder_path),
+                        symbols=new_symbols,
+                        file_contents=raw_files_subset,
+                        file_languages=incr_file_languages,
+                        repo=str(folder_path),
+                    )
+                    if dispatch_edges:
+                        if incr_context_metadata is None:
+                            incr_context_metadata = {}
+                        incr_context_metadata["dispatch_edges"] = dispatch_edges
+                        logger.info("LSP dispatch enrichment added %d edges (incremental)", len(dispatch_edges))
             except Exception:
                 logger.debug("LSP enrichment skipped (incremental)", exc_info=True)
 
@@ -1161,7 +1174,7 @@ def index_folder(
         # When enabled, resolve unqualified call sites via language servers.
         # Results are stored in context_metadata["lsp_edges"] for the call graph.
         try:
-            from ..enrichment.lsp_bridge import is_lsp_enabled, enrich_call_graph_with_lsp
+            from ..enrichment.lsp_bridge import is_lsp_enabled, enrich_call_graph_with_lsp, enrich_dispatch_edges
             if is_lsp_enabled(repo=str(folder_path)):
                 lsp_edges = enrich_call_graph_with_lsp(
                     root_path=str(folder_path),
@@ -1175,6 +1188,19 @@ def index_folder(
                         full_context_metadata = {}
                     full_context_metadata["lsp_edges"] = lsp_edges
                     logger.info("LSP enrichment added %d edges", len(lsp_edges))
+
+                dispatch_edges = enrich_dispatch_edges(
+                    root_path=str(folder_path),
+                    symbols=all_symbols,
+                    file_contents={},
+                    file_languages=file_languages,
+                    repo=str(folder_path),
+                )
+                if dispatch_edges:
+                    if full_context_metadata is None:
+                        full_context_metadata = {}
+                    full_context_metadata["dispatch_edges"] = dispatch_edges
+                    logger.info("LSP dispatch enrichment added %d edges", len(dispatch_edges))
         except Exception:
             logger.debug("LSP enrichment skipped", exc_info=True)
 

@@ -494,6 +494,66 @@ def _walk_tree(
         )
 
 
+def _detect_interface_keywords(node, language: str) -> list[str]:
+    """Tag interface/trait/abstract symbols for dispatch resolution.
+
+    Returns a list of keywords (e.g. ["interface"], ["trait"], ["abstract"])
+    to store in Symbol.keywords.  Returns [] for non-interface symbols.
+    """
+    ntype = node.type
+
+    # Go: type_declaration wrapping a type_spec whose value is interface_type
+    if language == "go" and ntype == "type_declaration":
+        for child in node.children:
+            if child.type == "type_spec":
+                for grandchild in child.children:
+                    if grandchild.type == "interface_type":
+                        return ["interface"]
+        return []
+
+    # Rust: trait_item is always a trait definition
+    if language == "rust" and ntype == "trait_item":
+        return ["trait"]
+
+    # TypeScript / JavaScript: interface_declaration
+    if language in ("typescript", "javascript", "tsx") and ntype == "interface_declaration":
+        return ["interface"]
+
+    # Java: interface_declaration, or class with "abstract" modifier
+    if language == "java":
+        if ntype == "interface_declaration":
+            return ["interface"]
+        if ntype == "class_declaration":
+            for child in node.children:
+                if child.type == "modifiers":
+                    for mod in child.children:
+                        if mod.type == "abstract":
+                            return ["abstract"]
+            return []
+        return []
+
+    # C#: interface_declaration, or class with "abstract" modifier
+    if language == "csharp":
+        if ntype == "interface_declaration":
+            return ["interface"]
+        if ntype == "class_declaration":
+            for child in node.children:
+                if child.type == "modifier" and child.text and child.text.decode("utf-8", errors="replace") == "abstract":
+                    return ["abstract"]
+            return []
+        return []
+
+    # PHP: interface_declaration or trait_declaration
+    if language == "php":
+        if ntype == "interface_declaration":
+            return ["interface"]
+        if ntype == "trait_declaration":
+            return ["trait"]
+        return []
+
+    return []
+
+
 def _extract_symbol(
     node,
     spec: LanguageSpec,
@@ -562,6 +622,9 @@ def _extract_symbol(
     symbol_bytes = source_bytes[start_node.start_byte:end_byte]
     c_hash = compute_content_hash(symbol_bytes)
 
+    # Detect interface / trait / abstract keywords for dispatch resolution
+    iface_keywords = _detect_interface_keywords(node, language)
+
     # Create symbol
     symbol = Symbol(
         id=make_symbol_id(filename, qualified_name, kind),
@@ -573,6 +636,7 @@ def _extract_symbol(
         signature=signature,
         docstring=docstring,
         decorators=decorators,
+        keywords=iface_keywords,
         parent=parent_symbol.id if parent_symbol else None,
         line=start_node.start_point[0] + 1,
         end_line=end_line_num,
@@ -580,7 +644,7 @@ def _extract_symbol(
         byte_length=end_byte - start_node.start_byte,
         content_hash=c_hash,
     )
-    
+
     return symbol
 
 

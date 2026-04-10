@@ -2,6 +2,21 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [2.0.0] — 2026-04-10
+
+### Added
+- **Interface & trait dispatch resolution** (Phase 5 / Gap 2C): resolves interface/trait method calls to their concrete implementations via LSP `textDocument/implementation`. Supports Go interfaces, Rust traits, TypeScript/Java/C#/PHP interfaces and abstract classes. Adds `dispatches_to` edges with `lsp_dispatch` resolution tier
+- **`_detect_interface_keywords()`** in `parser/extractor.py`: tags interface/trait/abstract symbols in `keywords` during tree-sitter parsing — zero-cost, no INDEX_VERSION bump required. Covers Go (`interface_type`), Rust (`trait_item`), TypeScript (`interface_declaration`), Java/C# (interface + abstract class), PHP (interface + trait)
+- **`goto_implementation()` on `LSPServer`**: new method parallel to `goto_definition()`, sends `textDocument/implementation` request. Updated `_initialize()` capabilities to advertise implementation support
+- **`DispatchEdge` dataclass**: represents interface method → concrete implementation mapping with `lsp_dispatch` resolution
+- **`resolve_implementations()` on `LSPBridge`**: resolves interface method positions to concrete implementations across multiple language servers. Caps at 50 implementations per interface method
+- **`enrich_dispatch_edges()` entry point**: high-level function that scans parsed symbols for interface keywords, collects method positions, resolves implementations via LSP, and returns serializable edge dicts
+- **`dispatch_edges` in `context_metadata`**: stored alongside existing `lsp_edges` in both full and incremental `index_folder` paths
+- **`_dispatch_callers()` / `_dispatch_callees()`** in `_call_graph.py`: query dispatch edges to find concrete implementations (callees) or callers through interface dispatch. Integrated at highest priority in `find_direct_callers/callees`
+- **`dispatches` section in `get_call_hierarchy`**: new response field showing interface dispatch relationships grouped by interface/method, with concrete implementation details
+- **`lsp_dispatch_enriched` methodology**: when dispatch edges are present, `_meta.methodology` is `lsp_dispatch_enriched` and `confidence_level` is `high`
+- 31 new tests in `tests/test_dispatch_resolution.py` covering interface keyword detection (15 languages), `goto_implementation` unit tests, `DispatchEdge` dataclass, `_dispatch_callers/_dispatch_callees` with mock indexes, `get_call_hierarchy` dispatches section, graceful degradation, and TS interface keyword propagation through `index_folder`
+
 ## [1.28.0] — 2026-04-10
 
 ### Added

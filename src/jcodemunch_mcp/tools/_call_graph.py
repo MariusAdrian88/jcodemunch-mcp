@@ -282,6 +282,113 @@ def _lsp_callees(index: "CodeIndex", sym: dict, symbols_by_file: dict[str, list[
     return results
 
 
+def _dispatch_callees(index: "CodeIndex", sym: dict, symbols_by_file: dict[str, list[dict]]) -> list[dict]:
+    """Return concrete implementations for interface methods called by sym.
+
+    If sym calls an interface method, dispatch_edges tell us which concrete
+    types implement that method.  Returns those implementations with
+    resolution="lsp_dispatch".
+    """
+    dispatch_edges = (getattr(index, "context_metadata", None) or {}).get("dispatch_edges", [])
+    if not dispatch_edges:
+        return []
+
+    call_refs = sym.get("call_references", [])
+    if not call_refs:
+        return []
+
+    results: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for edge in dispatch_edges:
+        method_name = edge.get("method_name", "")
+        if method_name not in call_refs:
+            continue
+        impl_file = edge.get("impl_file", "")
+        impl_line = edge.get("impl_line", 0)
+        impl_name = edge.get("impl_name", "")
+        if not impl_file:
+            continue
+        # Find the implementing symbol
+        for candidate in symbols_by_file.get(impl_file, []):
+            cid = candidate.get("id", "")
+            if not cid or cid in seen_ids:
+                continue
+            cand_line = candidate.get("line", 0)
+            cand_name = candidate.get("name", "")
+            # Match by line if we have it, or by name
+            if (impl_line and cand_line == impl_line) or (impl_name and cand_name == impl_name) or cand_name == method_name:
+                seen_ids.add(cid)
+                results.append({
+                    "id": cid,
+                    "name": cand_name,
+                    "kind": candidate.get("kind", ""),
+                    "file": impl_file,
+                    "line": cand_line,
+                    "resolution": "lsp_dispatch",
+                    "dispatch_interface": edge.get("interface_name", ""),
+                })
+                break
+
+    return results
+
+
+def _dispatch_callers(index: "CodeIndex", sym: dict, symbols_by_file: dict[str, list[dict]]) -> list[dict]:
+    """Return callers that invoke sym's method through an interface dispatch.
+
+    If sym is a concrete implementation of an interface method, find callers
+    that call the interface method (which dispatches to sym at runtime).
+    """
+    dispatch_edges = (getattr(index, "context_metadata", None) or {}).get("dispatch_edges", [])
+    if not dispatch_edges:
+        return []
+
+    sym_name = sym.get("name", "")
+    sym_file = sym.get("file", "")
+    if not sym_name or not sym_file:
+        return []
+
+    # Find dispatch edges where sym is the implementation
+    matching_interfaces: list[dict] = []
+    for edge in dispatch_edges:
+        if edge.get("impl_file") == sym_file and edge.get("impl_line") == sym.get("line", -1):
+            matching_interfaces.append(edge)
+        elif edge.get("impl_name") == sym_name and edge.get("impl_file") == sym_file:
+            matching_interfaces.append(edge)
+
+    if not matching_interfaces:
+        return []
+
+    # For each matching interface method, find callers of that interface method
+    results: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for edge in matching_interfaces:
+        iface_method = edge.get("method_name", "")
+        if not iface_method:
+            continue
+        # Find symbols that have this interface method in their call_references
+        for file_syms in symbols_by_file.values():
+            for candidate in file_syms:
+                cid = candidate.get("id", "")
+                if not cid or cid in seen_ids:
+                    continue
+                call_refs = candidate.get("call_references", [])
+                if iface_method in call_refs:
+                    seen_ids.add(cid)
+                    results.append({
+                        "id": cid,
+                        "name": candidate.get("name", ""),
+                        "kind": candidate.get("kind", ""),
+                        "file": candidate.get("file", ""),
+                        "line": candidate.get("line", 0),
+                        "resolution": "lsp_dispatch",
+                        "dispatch_interface": edge.get("interface_name", ""),
+                    })
+
+    return results
+
+
 def find_direct_callers(
     index: "CodeIndex",
     store: "IndexStore",
@@ -295,9 +402,14 @@ def find_direct_callers(
 
     Each result is ``{id, name, kind, file, line, resolution}``.
     """
-    # LSP-resolved callers take highest priority
+    # Dispatch callers (interface → impl) take highest priority
+    dispatch_crs = _dispatch_callers(index, sym, symbols_by_file)
+    dispatch_ids: set[str] = {c["id"] for c in dispatch_crs}
+
+    # LSP-resolved callers next
     lsp_callers = _lsp_callers(index, sym, symbols_by_file)
-    lsp_ids: set[str] = {c["id"] for c in lsp_callers}
+    lsp_callers = [c for c in lsp_callers if c["id"] not in dispatch_ids]
+    lsp_ids: set[str] = {c["id"] for c in lsp_callers} | dispatch_ids
 
     # Try AST-derived call_references (when available and non-empty)
     get_callers = getattr(index, "get_callers_by_name", None)
@@ -310,15 +422,15 @@ def find_direct_callers(
             for c in ast_callers:
                 if c["id"] not in lsp_ids:
                     ast_caller_ids.add(c["id"])
-            # Filter out duplicates with LSP
+            # Filter out duplicates with LSP/dispatch
             ast_callers = [c for c in ast_callers if c["id"] not in lsp_ids]
 
     # Always use text heuristic as fallback (handles partial AST data)
     sym_name: str = sym.get("name", "")
     sym_file: str = sym.get("file", "")
     if not sym_name or not sym_file:
-        if lsp_callers or ast_caller_ids:
-            return lsp_callers + ast_callers
+        if dispatch_crs or lsp_callers or ast_caller_ids:
+            return dispatch_crs + lsp_callers + ast_callers
         return []
 
     callers: list[dict] = []
@@ -349,7 +461,7 @@ def find_direct_callers(
                     "resolution": "text_matched",
                 })
 
-    return lsp_callers + ast_callers + callers
+    return dispatch_crs + lsp_callers + ast_callers + callers
 
 
 def find_direct_callees(
@@ -364,16 +476,21 @@ def find_direct_callees(
 
     Each result is ``{id, name, kind, file, line, resolution}``.
     """
-    # LSP-resolved callees take highest priority
+    # Dispatch callees (interface → concrete impls) take highest priority
+    dispatch_cls = _dispatch_callees(index, sym, symbols_by_file)
+    dispatch_ids: set[str] = {c["id"] for c in dispatch_cls}
+
+    # LSP-resolved callees next
     lsp_callees = _lsp_callees(index, sym, symbols_by_file)
-    lsp_ids: set[str] = {c["id"] for c in lsp_callees}
+    lsp_callees = [c for c in lsp_callees if c["id"] not in dispatch_ids]
+    lsp_ids: set[str] = {c["id"] for c in lsp_callees} | dispatch_ids
 
     # Fast path: use AST-derived call_references if available
     call_refs = sym.get("call_references", [])
     if call_refs:
         ast_callees = _callees_from_references(index, sym, symbols_by_file)
-        # Merge: LSP results override AST results for same symbol
-        merged = list(lsp_callees)
+        # Merge: dispatch + LSP results override AST results for same symbol
+        merged = list(dispatch_cls) + list(lsp_callees)
         for c in ast_callees:
             if c["id"] not in lsp_ids:
                 merged.append(c)
@@ -384,16 +501,16 @@ def find_direct_callees(
 
     sym_file: str = sym.get("file", "")
     if not sym_file:
-        return list(lsp_callees)
+        return list(dispatch_cls) + list(lsp_callees)
 
     file_content = store.get_file_content(owner, repo_name, sym_file)
     if not file_content:
-        return list(lsp_callees)
+        return list(dispatch_cls) + list(lsp_callees)
 
     file_lines = file_content.splitlines()
     sym_body = _symbol_body(file_lines, sym)
     if not sym_body:
-        return list(lsp_callees)
+        return list(dispatch_cls) + list(lsp_callees)
 
     # Resolve files that sym's file imports
     file_imports = (index.imports or {}).get(sym_file, [])
@@ -427,7 +544,7 @@ def find_direct_callees(
                     "resolution": "text_matched",
                 })
 
-    return list(lsp_callees) + callees
+    return list(dispatch_cls) + list(lsp_callees) + callees
 
 
 # ---------------------------------------------------------------------------
