@@ -73,6 +73,18 @@ LANGUAGE_EXTENSIONS = {
     ".hpp": "cpp",
     ".hh": "cpp",
     ".hxx": "cpp",
+    ".ino": "arduino",
+    ".pde": "arduino",
+    # VHDL
+    ".vhd": "vhdl",
+    ".vhdl": "vhdl",
+    ".vho": "vhdl",
+    ".vhs": "vhdl",
+    # Verilog / SystemVerilog
+    ".v": "verilog",
+    ".vh": "verilog",
+    ".sv": "verilog",
+    ".svh": "verilog",
     ".swift": "swift",
     ".ex": "elixir",
     ".exs": "elixir",
@@ -632,6 +644,83 @@ CPP_SPEC = LanguageSpec(
     container_node_types=["class_specifier", "struct_specifier", "union_specifier"],
     constant_patterns=["preproc_def"],
     type_patterns=["class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "type_definition", "alias_declaration"],
+)
+
+
+# Arduino specification (C++ superset — same AST node types)
+ARDUINO_SPEC = LanguageSpec(
+    ts_language="arduino",
+    symbol_node_types={
+        "class_specifier": "class",
+        "struct_specifier": "type",
+        "union_specifier": "type",
+        "enum_specifier": "type",
+        "type_definition": "type",
+        "alias_declaration": "type",
+        "function_definition": "function",
+        "declaration": "function",
+        "field_declaration": "function",
+    },
+    name_fields={
+        "class_specifier": "name",
+        "struct_specifier": "name",
+        "union_specifier": "name",
+        "enum_specifier": "name",
+        "type_definition": "declarator",
+        "alias_declaration": "name",
+        "function_definition": "declarator",
+        "declaration": "declarator",
+        "field_declaration": "declarator",
+    },
+    param_fields={
+        "function_definition": "declarator",
+        "declaration": "declarator",
+        "field_declaration": "declarator",
+    },
+    return_type_fields={
+        "function_definition": "type",
+        "declaration": "type",
+        "field_declaration": "type",
+    },
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=["class_specifier", "struct_specifier", "union_specifier"],
+    constant_patterns=["preproc_def"],
+    type_patterns=["class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "type_definition", "alias_declaration"],
+)
+
+
+# VHDL specification
+# No tree-sitter grammar available in tree-sitter-language-pack.
+# Custom regex parser in extractor.py via _parse_vhdl_symbols().
+VHDL_SPEC = LanguageSpec(
+    ts_language="vhdl",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# Verilog / SystemVerilog specification
+# No tree-sitter grammar available in tree-sitter-language-pack.
+# Custom regex parser in extractor.py via _parse_verilog_symbols().
+VERILOG_SPEC = LanguageSpec(
+    ts_language="verilog",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
 )
 
 
@@ -1498,6 +1587,9 @@ LANGUAGE_REGISTRY = {
     "graphql": GRAPHQL_SPEC,
     "autohotkey": AHK_SPEC,
     "asm": ASM_SPEC,
+    "arduino": ARDUINO_SPEC,
+    "vhdl": VHDL_SPEC,
+    "verilog": VERILOG_SPEC,
     "xml": XML_SPEC,
     "yaml": YAML_SPEC,
     "ansible": ANSIBLE_SPEC,

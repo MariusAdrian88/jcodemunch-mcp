@@ -41,6 +41,9 @@ _IMPORT_PATTERNS = {
     "c": re.compile(r"^\s*#\s*include\s+[<\"]"),
     "cpp": re.compile(r"^\s*#\s*include\s+[<\"]"),
     "objc": re.compile(r"^\s*#\s*(include|import)\s+[<\"]"),
+    "arduino": re.compile(r"^\s*#\s*include\s+[<\"]"),
+    "vhdl": re.compile(r"^\s*(library|use)\s+\w+", re.IGNORECASE),
+    "verilog": re.compile(r"^\s*`include\s+[\"']"),
     "swift": re.compile(r"^\s*import\s+\w+"),
     "scala": re.compile(r"^\s*import\s+[\w.{]"),
     "haskell": re.compile(r"^\s*import\s+(qualified\s+)?"),
@@ -80,6 +83,9 @@ _DEF_PATTERNS = {
     "c": re.compile(r"^\s*(struct|enum|union|typedef)\s+{name}\b"),
     "cpp": re.compile(r"^\s*(class|struct|enum|union|namespace|template)\s+{name}\b"),
     "objc": re.compile(r"^\s*@(interface|implementation|protocol)\s+{name}\b"),
+    "arduino": re.compile(r"^\s*(class|struct|enum|union|namespace|template)\s+{name}\b"),
+    "vhdl": re.compile(r"^\s*(entity|architecture|package|component|process|function|procedure|signal|constant|type|subtype)\s+{name}\b", re.IGNORECASE),
+    "verilog": re.compile(r"^\s*(module|interface|class|function|task|package|typedef)\s+{name}\b"),
     "swift": re.compile(r"^\s*(public\s+|private\s+|internal\s+|open\s+|fileprivate\s+)?(class|struct|enum|protocol|func|extension|typealias|actor)\s+{name}\b"),
     "scala": re.compile(r"^\s*(private\s+|protected\s+)?(abstract\s+|sealed\s+|case\s+)?(class|object|trait|def|val|var|type|enum)\s+{name}\b"),
     "haskell": re.compile(r"^\s*(data|type|newtype|class)\s+{name}\b"),
@@ -654,8 +660,8 @@ def _compute_new_import(old_import_line, old_file, new_file, sym_name, language)
             return old_import_line.replace(old_spec, new_spec), None
         return old_import_line, f"Ruby require path '{old_spec}' not found in require statement"
 
-    elif language in ("c", "cpp", "objc"):
-        # C/C++/ObjC: #include "old/path.h" → #include "new/path.h"
+    elif language in ("c", "cpp", "objc", "arduino"):
+        # C/C++/ObjC/Arduino: #include "old/path.h" → #include "new/path.h"
         # Only rewrite quoted includes (not angle-bracket system includes)
         old_spec = PurePosixPath(old_file).as_posix()
         new_spec = PurePosixPath(new_file).as_posix()
@@ -731,6 +737,22 @@ def _compute_new_import(old_import_line, old_file, new_file, sym_name, language)
         if old_spec in old_import_line:
             return old_import_line.replace(old_spec, new_spec), None
         return old_import_line, f"ASM include path '{old_spec}' not found"
+
+    elif language == "vhdl":
+        # VHDL: use ieee.std_logic_1164.all; → package-level, rarely rewritten
+        old_spec = PurePosixPath(old_file).stem
+        new_spec = PurePosixPath(new_file).stem
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"VHDL use clause '{old_spec}' not found"
+
+    elif language == "verilog":
+        # Verilog: `include "old/path.vh" → `include "new/path.vh"
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"Verilog include path '{old_spec}' not found"
 
     elif language in ("elixir", "gleam"):
         # Elixir: alias OldModule.Name → alias NewModule.Name
@@ -845,8 +867,12 @@ def _format_import_line(imp_dict, language):
         return f"use {spec};"
     elif language == "ruby":
         return f"require '{spec}'"
-    elif language in ("c", "cpp", "objc"):
+    elif language in ("c", "cpp", "objc", "arduino"):
         return f'#include "{spec}"'
+    elif language == "vhdl":
+        return f"use {spec};"
+    elif language == "verilog":
+        return f'`include "{spec}"'
     elif language == "swift":
         return f"import {spec}"
     elif language == "haskell":
@@ -1748,10 +1774,15 @@ def _plan_signature_change(index, store, owner, name, sym, new_signature, depth)
             keyword = "defp" if first_line.strip().startswith("defp") else "def"
             new_def = f"{indent}{keyword} {new_signature}"
 
-        elif lang in ("c", "cpp"):
+        elif lang in ("c", "cpp", "arduino"):
             sig_lines, line_sep, sig_end_idx = _capture_multiline_sig(lines, def_line_idx, content)
             old_def = line_sep.join(sig_lines)
             new_def = f"{indent}{new_signature}"
+
+        elif lang in ("vhdl", "verilog"):
+            old_def = first_line.rstrip()
+            new_def = f"{indent}{new_signature}"
+            sig_end_idx = def_line_idx
 
         elif lang in ("lua", "luau"):
             sig_lines, line_sep, sig_end_idx = _capture_multiline_sig(lines, def_line_idx, content)

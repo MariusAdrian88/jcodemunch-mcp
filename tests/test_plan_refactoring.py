@@ -2415,6 +2415,15 @@ class TestFormatImportLineAllLanguages:
     def test_asm(self):
         assert _format_import_line({"specifier": "macros.inc", "names": []}, "asm") == '.include "macros.inc"'
 
+    def test_arduino(self):
+        assert _format_import_line({"specifier": "Servo.h", "names": []}, "arduino") == '#include "Servo.h"'
+
+    def test_vhdl(self):
+        assert _format_import_line({"specifier": "ieee.std_logic_1164.all", "names": []}, "vhdl") == "use ieee.std_logic_1164.all;"
+
+    def test_verilog(self):
+        assert _format_import_line({"specifier": "defines.vh", "names": []}, "verilog") == '`include "defines.vh"'
+
     def test_gleam(self):
         assert _format_import_line({"specifier": "gleam/io", "names": []}, "gleam") == "import gleam/io"
 

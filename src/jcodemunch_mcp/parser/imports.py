@@ -52,6 +52,13 @@ _C_INCLUDE = re.compile(r"""^#include\s+[<"]([^>"]+)[>"]""", re.MULTILINE)
 # Assembly: .include "foo" / .incbin "foo" / %include "foo"
 _ASM_INCLUDE = re.compile(r"""^\s*[.%]include\s+["']([^"']+)["']""", re.MULTILINE | re.IGNORECASE)
 
+# VHDL: library ieee; / use ieee.std_logic_1164.all;
+_VHDL_LIBRARY = re.compile(r"""^\s*library\s+(\w+)\s*;""", re.MULTILINE | re.IGNORECASE)
+_VHDL_USE = re.compile(r"""^\s*use\s+([\w.]+)\s*;""", re.MULTILINE | re.IGNORECASE)
+
+# Verilog/SystemVerilog: `include "foo.vh"
+_VERILOG_INCLUDE = re.compile(r"""^\s*`include\s+["']([^"']+)["']""", re.MULTILINE)
+
 # Ruby: require 'foo' / require_relative 'bar'
 _RUBY_REQUIRE = re.compile(r"""(?:require|require_relative)\s+['"]([^'"]+)['"]""", re.MULTILINE)
 
@@ -215,6 +222,26 @@ def _extract_c_imports(content: str) -> list[dict]:
 
 def _extract_asm_imports(content: str) -> list[dict]:
     return [{"specifier": m.group(1), "names": []} for m in _ASM_INCLUDE.finditer(content)]
+
+
+def _extract_vhdl_imports(content: str) -> list[dict]:
+    edges = []
+    seen: set[str] = set()
+    for m in _VHDL_LIBRARY.finditer(content):
+        lib = m.group(1).lower()
+        if lib != "work" and lib not in seen:
+            seen.add(lib)
+            edges.append({"specifier": lib, "names": []})
+    for m in _VHDL_USE.finditer(content):
+        spec = m.group(1)
+        if spec not in seen:
+            seen.add(spec)
+            edges.append({"specifier": spec, "names": []})
+    return edges
+
+
+def _extract_verilog_imports(content: str) -> list[dict]:
+    return [{"specifier": m.group(1), "names": []} for m in _VERILOG_INCLUDE.finditer(content)]
 
 
 def _extract_ruby_imports(content: str) -> list[dict]:
@@ -408,6 +435,7 @@ _LANGUAGE_EXTRACTORS = {
     "c": _extract_c_imports,
     "cpp": _extract_c_imports,
     "objc": _extract_c_imports,
+    "arduino": _extract_c_imports,
     "ruby": _extract_ruby_imports,
     "csharp": _extract_csharp_imports,
     "php": _extract_php_imports,
@@ -417,6 +445,8 @@ _LANGUAGE_EXTRACTORS = {
     "dart": _extract_dart_imports,
     "sql": _extract_sql_dbt_imports,
     "asm": _extract_asm_imports,
+    "vhdl": _extract_vhdl_imports,
+    "verilog": _extract_verilog_imports,
 }
 
 

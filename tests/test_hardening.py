@@ -334,6 +334,53 @@ int only_c(void) { int v[] = (int[]){1,2,3}; return v[0]; }
         assert run1 and run2
         assert {s.language for s in run1} == {s.language for s in run2}
 
+    # -- Arduino ---------------------------------------------------------
+
+    def test_arduino_functions(self):
+        content, fname = _fixture("arduino", "sample.ino")
+        symbols = parse_file(content, fname, "arduino")
+        func_names = {s.name for s in symbols if s.kind == "function"}
+        assert "setup" in func_names
+        assert "loop" in func_names
+        assert "readTemperature" in func_names
+
+    def test_arduino_class(self):
+        content, fname = _fixture("arduino", "sample.ino")
+        symbols = parse_file(content, fname, "arduino")
+        cls = _by_name(symbols, "MotorController")
+        assert cls.kind == "class"
+
+    # -- VHDL ------------------------------------------------------------
+
+    def test_vhdl_entity(self):
+        content, fname = _fixture("vhdl", "sample.vhd")
+        symbols = parse_file(content, fname, "vhdl")
+        entity = _by_name(symbols, "alu")
+        assert entity.kind == "class"
+
+    def test_vhdl_functions(self):
+        content, fname = _fixture("vhdl", "sample.vhd")
+        symbols = parse_file(content, fname, "vhdl")
+        func_names = {s.name for s in symbols if s.kind == "function"}
+        assert "max_val" in func_names
+        assert "reset_reg" in func_names
+        assert "compute" in func_names
+
+    # -- Verilog ---------------------------------------------------------
+
+    def test_verilog_module(self):
+        content, fname = _fixture("verilog", "sample.sv")
+        symbols = parse_file(content, fname, "verilog")
+        mod = _by_name(symbols, "alu")
+        assert mod.kind == "class"
+
+    def test_verilog_functions(self):
+        content, fname = _fixture("verilog", "sample.sv")
+        symbols = parse_file(content, fname, "verilog")
+        func_names = {s.name for s in symbols if s.kind == "function"}
+        assert "compute" in func_names
+        assert "display_result" in func_names
+
     # -- C ---------------------------------------------------------------
 
     def test_c_functions(self):
