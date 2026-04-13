@@ -2,6 +2,13 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.41.0] — 2026-04-13
+
+### Added
+- **munch-bench** — Retrieval + Inference benchmark consolidated into the mothership (Phase 5 of Groq Integration). 110 questions across 11 repos, evaluation harness with Groq/OpenAI/Anthropic providers, static HTML leaderboard with Chart.js. Install with `pip install jcodemunch-mcp[bench]`, run with `munch-bench run --provider groq`. First results: Sonnet 0.81, Haiku 0.68, Groq Llama 0.69 judge scores.
+- New optional dependency group `[bench]` (openai, anthropic, pyyaml, rich, jinja2)
+- `munch-bench` CLI entrypoint: `run`, `compare`, `corpus-stats` subcommands
+
 ## [1.40.1] — 2026-04-13
 
 ### Fixed
