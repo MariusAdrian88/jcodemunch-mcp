@@ -274,6 +274,10 @@ def parse_file(content: str, filename: str, language: str, source_bytes: Optiona
         symbols = _parse_autohotkey_symbols(source_bytes, filename)
     elif language == "asm":
         symbols = _parse_asm_symbols(source_bytes, filename)
+    elif language == "vhdl":
+        symbols = _parse_vhdl_symbols(source_bytes, filename)
+    elif language == "verilog":
+        symbols = _parse_verilog_symbols(source_bytes, filename)
     elif language == "xml":
         symbols = _parse_xml_symbols(source_bytes, filename)
     elif language == "yaml":
@@ -7195,4 +7199,331 @@ def _parse_asm_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
         # Non-matching line — clear pending comments
         pending_comments.clear()
 
+    return symbols
+
+
+# ---------------------------------------------------------------------------
+# VHDL
+# ---------------------------------------------------------------------------
+
+_VHDL_ENTITY = _re.compile(
+    r"^\s*entity\s+(\w+)\s+is\b", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_ARCHITECTURE = _re.compile(
+    r"^\s*architecture\s+(\w+)\s+of\s+(\w+)\s+is\b", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_PACKAGE = _re.compile(
+    r"^\s*package\s+(?:body\s+)?(\w+)\s+is\b", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_PROCESS = _re.compile(
+    r"^\s*(\w+)\s*:\s*process\b", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_FUNCTION = _re.compile(
+    r"^\s*(?:(?:pure|impure)\s+)?function\s+(\w+)", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_PROCEDURE = _re.compile(
+    r"^\s*procedure\s+(\w+)", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_COMPONENT = _re.compile(
+    r"^\s*component\s+(\w+)\b", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_SIGNAL = _re.compile(
+    r"^\s*signal\s+(\w+)\s*:", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_CONSTANT = _re.compile(
+    r"^\s*constant\s+(\w+)\s*:", _re.IGNORECASE | _re.MULTILINE
+)
+_VHDL_TYPE = _re.compile(
+    r"^\s*(?:sub)?type\s+(\w+)\s+is\b", _re.IGNORECASE | _re.MULTILINE
+)
+
+
+def _parse_vhdl_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Extract symbols from VHDL source using regex line-scanning."""
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    def _line_of(pos: int) -> int:
+        return source.count("\n", 0, pos) + 1
+
+    for m in _VHDL_ENTITY.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "class"),
+            file=filename, name=name, qualified_name=name,
+            kind="class", language="vhdl",
+            signature=f"entity {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_ARCHITECTURE.finditer(source):
+        arch_name, entity_name = m.group(1), m.group(2)
+        qualified = f"{entity_name}.{arch_name}"
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, qualified, "class"),
+            file=filename, name=arch_name, qualified_name=qualified,
+            kind="class", language="vhdl",
+            signature=f"architecture {arch_name} of {entity_name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_PACKAGE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "class"),
+            file=filename, name=name, qualified_name=name,
+            kind="class", language="vhdl",
+            signature=f"package {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_PROCESS.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "function"),
+            file=filename, name=name, qualified_name=name,
+            kind="function", language="vhdl",
+            signature=f"{name}: process",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_FUNCTION.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "function"),
+            file=filename, name=name, qualified_name=name,
+            kind="function", language="vhdl",
+            signature=f"function {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_PROCEDURE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "function"),
+            file=filename, name=name, qualified_name=name,
+            kind="function", language="vhdl",
+            signature=f"procedure {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_COMPONENT.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "type"),
+            file=filename, name=name, qualified_name=name,
+            kind="type", language="vhdl",
+            signature=f"component {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_SIGNAL.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "constant"),
+            file=filename, name=name, qualified_name=name,
+            kind="constant", language="vhdl",
+            signature=f"signal {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_CONSTANT.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "constant"),
+            file=filename, name=name, qualified_name=name,
+            kind="constant", language="vhdl",
+            signature=f"constant {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VHDL_TYPE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "type"),
+            file=filename, name=name, qualified_name=name,
+            kind="type", language="vhdl",
+            signature=f"type {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    symbols.sort(key=lambda s: s.line)
+    return symbols
+
+
+# ---------------------------------------------------------------------------
+# Verilog / SystemVerilog
+# ---------------------------------------------------------------------------
+
+_VERILOG_MODULE = _re.compile(
+    r"^\s*module\s+(\w+)", _re.MULTILINE
+)
+_VERILOG_INTERFACE = _re.compile(
+    r"^\s*interface\s+(\w+)", _re.MULTILINE
+)
+_VERILOG_CLASS = _re.compile(
+    r"^\s*(?:virtual\s+)?class\s+(\w+)", _re.MULTILINE
+)
+_VERILOG_FUNCTION = _re.compile(
+    r"^\s*(?:(?:static|virtual|protected|local)\s+)*function\s+(?:(?:automatic|static)\s+)?(?:(?:void|[\w]+(?:\s*\[[^\]]*\])?)\s+)?(\w+)\s*[;(]",
+    _re.MULTILINE,
+)
+_VERILOG_TASK = _re.compile(
+    r"^\s*(?:(?:static|virtual|protected|local)\s+)*task\s+(?:(?:automatic|static)\s+)?(\w+)\s*[;(]",
+    _re.MULTILINE,
+)
+_VERILOG_PACKAGE = _re.compile(
+    r"^\s*package\s+(\w+)\s*;", _re.MULTILINE
+)
+_VERILOG_TYPEDEF = _re.compile(
+    r"^\s*typedef\s+(?:(?:enum|struct|union)\b[^{;]*)?(?:\{[^}]*\}\s*)?(\w+)\s*;",
+    _re.MULTILINE | _re.DOTALL,
+)
+_VERILOG_TYPEDEF_SIMPLE = _re.compile(
+    r"^\s*typedef\s+\w+(?:\s+\w+)*(?:\s*\[[^\]]*\])?\s+(\w+)\s*;",
+    _re.MULTILINE,
+)
+_VERILOG_PARAM = _re.compile(
+    r"^\s*(?:localparam|parameter)\s+(?:\w+\s+)?(\w+)\s*=",
+    _re.MULTILINE,
+)
+_VERILOG_DEFINE = _re.compile(
+    r"^\s*`define\s+(\w+)", _re.MULTILINE
+)
+
+
+def _parse_verilog_symbols(source_bytes: bytes, filename: str) -> list[Symbol]:
+    """Extract symbols from Verilog/SystemVerilog source using regex."""
+    source = source_bytes.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+
+    def _line_of(pos: int) -> int:
+        return source.count("\n", 0, pos) + 1
+
+    for m in _VERILOG_MODULE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "class"),
+            file=filename, name=name, qualified_name=name,
+            kind="class", language="verilog",
+            signature=f"module {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VERILOG_INTERFACE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "class"),
+            file=filename, name=name, qualified_name=name,
+            kind="class", language="verilog",
+            signature=f"interface {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VERILOG_CLASS.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "class"),
+            file=filename, name=name, qualified_name=name,
+            kind="class", language="verilog",
+            signature=f"class {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VERILOG_FUNCTION.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "function"),
+            file=filename, name=name, qualified_name=name,
+            kind="function", language="verilog",
+            signature=f"function {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VERILOG_TASK.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "function"),
+            file=filename, name=name, qualified_name=name,
+            kind="function", language="verilog",
+            signature=f"task {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VERILOG_PACKAGE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "class"),
+            file=filename, name=name, qualified_name=name,
+            kind="class", language="verilog",
+            signature=f"package {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    typedef_names: set[str] = set()
+    for m in _VERILOG_TYPEDEF.finditer(source):
+        name = m.group(1)
+        typedef_names.add(name)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "type"),
+            file=filename, name=name, qualified_name=name,
+            kind="type", language="verilog",
+            signature=f"typedef {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    # Fallback for simple typedefs: typedef logic [7:0] byte_t;
+    for m in _VERILOG_TYPEDEF_SIMPLE.finditer(source):
+        name = m.group(1)
+        if name not in typedef_names:
+            typedef_names.add(name)
+            ln = _line_of(m.start())
+            symbols.append(Symbol(
+                id=make_symbol_id(filename, name, "type"),
+                file=filename, name=name, qualified_name=name,
+                kind="type", language="verilog",
+                signature=f"typedef {name}",
+                docstring="", line=ln, end_line=ln,
+            ))
+
+    for m in _VERILOG_PARAM.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "constant"),
+            file=filename, name=name, qualified_name=name,
+            kind="constant", language="verilog",
+            signature=f"parameter {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    for m in _VERILOG_DEFINE.finditer(source):
+        name = m.group(1)
+        ln = _line_of(m.start())
+        symbols.append(Symbol(
+            id=make_symbol_id(filename, name, "constant"),
+            file=filename, name=name, qualified_name=name,
+            kind="constant", language="verilog",
+            signature=f"`define {name}",
+            docstring="", line=ln, end_line=ln,
+        ))
+
+    symbols.sort(key=lambda s: s.line)
     return symbols

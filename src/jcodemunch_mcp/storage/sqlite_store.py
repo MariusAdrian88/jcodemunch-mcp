@@ -1537,6 +1537,8 @@ class SQLiteIndexStore:
                 ".jsx": "javascript", ".tsx": "typescript", ".go": "go",
                 ".rs": "rust", ".java": "java", ".c": "c", ".cpp": "cpp",
                 ".h": "cpp", ".ino": "arduino", ".pde": "arduino",
+                ".vhd": "vhdl", ".vhdl": "vhdl",
+                ".v": "verilog", ".sv": "verilog",
                 ".cs": "csharp", ".swift": "swift",
                 ".rb": "ruby", ".php": "php", ".dart": "dart",
                 ".kt": "kotlin", ".scala": "scala", ".lua": "lua",

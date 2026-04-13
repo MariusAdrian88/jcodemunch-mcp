@@ -471,7 +471,7 @@ def extract_signals_from_index(index: Any, file_paths: Optional[list[str]] = Non
 
 
 _LEGACY_LANGS = {"vb", "vb_net", "fortran", "cobol", "pascal", "delphi"}
-_COMPLEX_LANGS = {"cpp", "c", "arduino", "rust", "haskell", "scala"}
+_COMPLEX_LANGS = {"cpp", "c", "arduino", "vhdl", "verilog", "rust", "haskell", "scala"}
 
 
 def _classify_language_mix(languages: set[str]) -> str:

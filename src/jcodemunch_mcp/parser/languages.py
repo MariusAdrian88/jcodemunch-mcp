@@ -75,6 +75,16 @@ LANGUAGE_EXTENSIONS = {
     ".hxx": "cpp",
     ".ino": "arduino",
     ".pde": "arduino",
+    # VHDL
+    ".vhd": "vhdl",
+    ".vhdl": "vhdl",
+    ".vho": "vhdl",
+    ".vhs": "vhdl",
+    # Verilog / SystemVerilog
+    ".v": "verilog",
+    ".vh": "verilog",
+    ".sv": "verilog",
+    ".svh": "verilog",
     ".swift": "swift",
     ".ex": "elixir",
     ".exs": "elixir",
@@ -677,6 +687,40 @@ ARDUINO_SPEC = LanguageSpec(
     container_node_types=["class_specifier", "struct_specifier", "union_specifier"],
     constant_patterns=["preproc_def"],
     type_patterns=["class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "type_definition", "alias_declaration"],
+)
+
+
+# VHDL specification
+# No tree-sitter grammar available in tree-sitter-language-pack.
+# Custom regex parser in extractor.py via _parse_vhdl_symbols().
+VHDL_SPEC = LanguageSpec(
+    ts_language="vhdl",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
+)
+
+
+# Verilog / SystemVerilog specification
+# No tree-sitter grammar available in tree-sitter-language-pack.
+# Custom regex parser in extractor.py via _parse_verilog_symbols().
+VERILOG_SPEC = LanguageSpec(
+    ts_language="verilog",
+    symbol_node_types={},
+    name_fields={},
+    param_fields={},
+    return_type_fields={},
+    docstring_strategy="preceding_comment",
+    decorator_node_type=None,
+    container_node_types=[],
+    constant_patterns=[],
+    type_patterns=[],
 )
 
 
@@ -1544,6 +1588,8 @@ LANGUAGE_REGISTRY = {
     "autohotkey": AHK_SPEC,
     "asm": ASM_SPEC,
     "arduino": ARDUINO_SPEC,
+    "vhdl": VHDL_SPEC,
+    "verilog": VERILOG_SPEC,
     "xml": XML_SPEC,
     "yaml": YAML_SPEC,
     "ansible": ANSIBLE_SPEC,

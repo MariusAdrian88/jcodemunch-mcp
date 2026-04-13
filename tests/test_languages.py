@@ -2183,3 +2183,269 @@ def test_arduino_extension_mapping():
     assert get_language_for_path("sketch/Blink.ino") == "arduino"
     assert get_language_for_path("old/Blink.pde") == "arduino"
     assert get_language_for_path("SKETCH.INO") == "arduino"
+
+
+# ---------------------------------------------------------------------------
+# VHDL
+# ---------------------------------------------------------------------------
+
+VHDL_SOURCE = """\
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity counter is
+    port (
+        clk : in  std_logic;
+        rst : in  std_logic;
+        cnt : out std_logic_vector(7 downto 0)
+    );
+end entity counter;
+
+architecture behavioral of counter is
+    signal count_reg : std_logic_vector(7 downto 0);
+    constant MAX_COUNT : integer := 255;
+    type state_type is (idle, counting);
+    component adder
+        port (x, y : in std_logic_vector; sum : out std_logic_vector);
+    end component adder;
+begin
+    count_proc: process(clk, rst)
+    begin
+        if rst = '1' then
+            count_reg <= (others => '0');
+        elsif rising_edge(clk) then
+            count_reg <= count_reg + 1;
+        end if;
+    end process count_proc;
+end architecture behavioral;
+
+package counter_pkg is
+    function to_bcd(val : integer) return std_logic_vector;
+    procedure reset_counter(signal cnt : out std_logic_vector);
+end package counter_pkg;
+"""
+
+
+def test_parse_vhdl():
+    """Test VHDL (.vhd) parsing — entity, architecture, signals, etc."""
+    symbols = parse_file(VHDL_SOURCE, "counter.vhd", "vhdl")
+
+    # Entity
+    entity = next((s for s in symbols if s.name == "counter" and s.kind == "class"), None)
+    assert entity is not None
+    assert "entity counter" in entity.signature
+
+    # Architecture
+    arch = next((s for s in symbols if s.name == "behavioral"), None)
+    assert arch is not None
+    assert arch.kind == "class"
+    assert arch.qualified_name == "counter.behavioral"
+
+    # Signal
+    sig = next((s for s in symbols if s.name == "count_reg"), None)
+    assert sig is not None
+    assert sig.kind == "constant"
+
+    # Constant
+    const = next((s for s in symbols if s.name == "MAX_COUNT"), None)
+    assert const is not None
+    assert const.kind == "constant"
+
+    # Type
+    state = next((s for s in symbols if s.name == "state_type"), None)
+    assert state is not None
+    assert state.kind == "type"
+
+    # Component
+    comp = next((s for s in symbols if s.name == "adder"), None)
+    assert comp is not None
+    assert comp.kind == "type"
+
+    # Process
+    proc = next((s for s in symbols if s.name == "count_proc"), None)
+    assert proc is not None
+    assert proc.kind == "function"
+
+    # Package
+    pkg = next((s for s in symbols if s.name == "counter_pkg"), None)
+    assert pkg is not None
+    assert pkg.kind == "class"
+
+    # Functions and procedures
+    fn = next((s for s in symbols if s.name == "to_bcd"), None)
+    assert fn is not None
+    assert fn.kind == "function"
+
+    pr = next((s for s in symbols if s.name == "reset_counter"), None)
+    assert pr is not None
+    assert pr.kind == "function"
+
+    # All symbols tagged as vhdl
+    assert all(s.language == "vhdl" for s in symbols)
+
+
+def test_vhdl_extension_mapping():
+    """.vhd and .vhdl extensions map to vhdl language."""
+    from jcodemunch_mcp.parser.languages import get_language_for_path
+    assert get_language_for_path("src/counter.vhd") == "vhdl"
+    assert get_language_for_path("src/counter.vhdl") == "vhdl"
+    assert get_language_for_path("src/COUNTER.VHD") == "vhdl"
+    assert get_language_for_path("src/netlist.vho") == "vhdl"
+
+
+# ---------------------------------------------------------------------------
+# Verilog / SystemVerilog
+# ---------------------------------------------------------------------------
+
+VERILOG_SOURCE = """\
+`include "defines.vh"
+`define DATA_WIDTH 8
+
+module alu #(
+    parameter WIDTH = 8
+)(
+    input  logic [WIDTH-1:0] a,
+    input  logic [WIDTH-1:0] b,
+    output logic [WIDTH-1:0] result
+);
+    localparam ADD = 2'b00;
+
+    function logic [WIDTH-1:0] compute;
+        input logic [WIDTH-1:0] x, y;
+        compute = x + y;
+    endfunction
+
+    task display_result;
+        $display("Result: %h", result);
+    endtask
+
+    assign result = compute(a, b);
+endmodule
+
+interface axi_if #(parameter ADDR_WIDTH = 32);
+    logic [ADDR_WIDTH-1:0] addr;
+endinterface
+
+package alu_pkg;
+    typedef enum logic [1:0] { OP_ADD, OP_SUB } op_t;
+endpackage
+
+class scoreboard;
+    function void check(input logic [7:0] expected, actual);
+    endfunction
+endclass
+"""
+
+
+def test_parse_verilog():
+    """Test Verilog/SystemVerilog parsing."""
+    symbols = parse_file(VERILOG_SOURCE, "alu.sv", "verilog")
+
+    # Module
+    mod = next((s for s in symbols if s.name == "alu"), None)
+    assert mod is not None
+    assert mod.kind == "class"
+    assert "module alu" in mod.signature
+
+    # Parameter
+    param = next((s for s in symbols if s.name == "WIDTH"), None)
+    assert param is not None
+    assert param.kind == "constant"
+
+    # Localparam
+    lparam = next((s for s in symbols if s.name == "ADD"), None)
+    assert lparam is not None
+    assert lparam.kind == "constant"
+
+    # Function
+    fn = next((s for s in symbols if s.name == "compute"), None)
+    assert fn is not None
+    assert fn.kind == "function"
+
+    # Task
+    task = next((s for s in symbols if s.name == "display_result"), None)
+    assert task is not None
+    assert task.kind == "function"
+
+    # Interface
+    iface = next((s for s in symbols if s.name == "axi_if"), None)
+    assert iface is not None
+    assert iface.kind == "class"
+
+    # Package
+    pkg = next((s for s in symbols if s.name == "alu_pkg"), None)
+    assert pkg is not None
+    assert pkg.kind == "class"
+
+    # Typedef
+    td = next((s for s in symbols if s.name == "op_t"), None)
+    assert td is not None
+    assert td.kind == "type"
+
+    # Class
+    cls = next((s for s in symbols if s.name == "scoreboard"), None)
+    assert cls is not None
+    assert cls.kind == "class"
+
+    # `define
+    defn = next((s for s in symbols if s.name == "DATA_WIDTH"), None)
+    assert defn is not None
+    assert defn.kind == "constant"
+
+    # All symbols tagged as verilog
+    assert all(s.language == "verilog" for s in symbols)
+
+
+def test_verilog_automatic_qualifier():
+    """function automatic / task automatic must be captured."""
+    src = """\
+module tb;
+    function automatic void setup;
+    endfunction
+    function automatic logic [7:0] compute;
+        input logic [7:0] x;
+        compute = x + 1;
+    endfunction
+    task automatic run_test;
+    endtask
+    virtual function automatic void check;
+    endfunction
+endmodule
+"""
+    symbols = parse_file(src, "tb.sv", "verilog")
+    fn_names = {s.name for s in symbols if s.kind == "function"}
+    assert "setup" in fn_names
+    assert "compute" in fn_names
+    assert "run_test" in fn_names
+    assert "check" in fn_names
+    # 'void' must NOT appear as a false-positive function name
+    assert "void" not in fn_names
+
+
+def test_verilog_simple_typedef():
+    """typedef without enum/struct braces must be captured."""
+    src = """\
+module types;
+    typedef logic [7:0] byte_t;
+    typedef int unsigned uint_t;
+    typedef enum logic [1:0] { A, B, C } abc_t;
+endmodule
+"""
+    symbols = parse_file(src, "types.sv", "verilog")
+    type_names = {s.name for s in symbols if s.kind == "type"}
+    assert "byte_t" in type_names
+    assert "uint_t" in type_names
+    assert "abc_t" in type_names
+    # abc_t must not be duplicated
+    type_list = [s.name for s in symbols if s.kind == "type"]
+    assert type_list.count("abc_t") == 1
+
+
+def test_verilog_extension_mapping():
+    """.v, .vh, .sv, .svh extensions map to verilog language."""
+    from jcodemunch_mcp.parser.languages import get_language_for_path
+    assert get_language_for_path("src/alu.v") == "verilog"
+    assert get_language_for_path("src/defines.vh") == "verilog"
+    assert get_language_for_path("src/alu.sv") == "verilog"
+    assert get_language_for_path("src/pkg.svh") == "verilog"
+    assert get_language_for_path("SRC/ALU.SV") == "verilog"
