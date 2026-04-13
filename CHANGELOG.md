@@ -2,6 +2,11 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.40.1] — 2026-04-13
+
+### Fixed
+- Fix `jcodemunch-mcp index <owner/repo>` CLI crash — was passing `repo=` instead of `url=` to `index_repo()`, causing `TypeError: got an unexpected keyword argument 'repo'`
+
 ## [1.40.0] — 2026-04-13
 
 ### Added

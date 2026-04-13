@@ -4432,7 +4432,7 @@ def main(argv: Optional[list[str]] = None):
         else:
             from .tools.index_repo import index_repo as _index_repo
             result = asyncio.run(_index_repo(
-                repo=t,
+                url=t,
                 use_ai_summaries=use_ai,
                 storage_path=os.environ.get("CODE_INDEX_PATH"),
             ))
