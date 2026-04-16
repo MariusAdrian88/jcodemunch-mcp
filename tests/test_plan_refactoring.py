@@ -1705,3 +1705,199 @@ class TestSignatureChange:
         assert "error" not in result
         assert visibility_check in result["definition_edit"]["new_text"]
 
+
+class TestLanguageCoverage:
+    """Ensure plan_refactoring supports all languages in LANGUAGE_REGISTRY."""
+
+    def test_01_all_languages_have_import_patterns(self):
+        """Every language in LANGUAGE_REGISTRY must have _IMPORT_PATTERNS entry."""
+        import re as re_module
+        from jcodemunch_mcp.parser.languages import LANGUAGE_REGISTRY
+        from jcodemunch_mcp.tools.plan_refactoring import _IMPORT_PATTERNS
+
+        registry_langs = set(LANGUAGE_REGISTRY.keys())
+        import_langs = set(_IMPORT_PATTERNS.keys())
+
+        # Data formats are exempt — they have no import syntax
+        exempt = {"toml", "xml", "json", "yaml", "ansible", "openapi"}
+        expected = registry_langs - exempt
+        missing = expected - import_langs
+
+        assert not missing, f"Missing _IMPORT_PATTERNS for: {sorted(missing)}"
+
+    def test_02_all_languages_have_def_patterns(self):
+        """Every language in LANGUAGE_REGISTRY must have _DEF_PATTERNS entry."""
+        import re as re_module
+        from jcodemunch_mcp.parser.languages import LANGUAGE_REGISTRY
+        from jcodemunch_mcp.tools.plan_refactoring import _DEF_PATTERNS
+
+        registry_langs = set(LANGUAGE_REGISTRY.keys())
+        def_langs = set(_DEF_PATTERNS.keys())
+
+        # Data formats are exempt — they have no symbol definitions
+        exempt = {"toml", "xml", "json", "yaml", "ansible", "openapi"}
+        expected = registry_langs - exempt
+        missing = expected - def_langs
+
+        assert not missing, f"Missing _DEF_PATTERNS for: {sorted(missing)}"
+
+    def test_03_import_patterns_are_not_trivial(self):
+        """Import patterns must match at least one known import syntax."""
+        from jcodemunch_mcp.tools.plan_refactoring import _IMPORT_PATTERNS
+
+        # Sample import lines for each language
+        sample_imports = {
+            "python": "from os.path import join",
+            "typescript": "import { foo } from './bar';",
+            "javascript": "const foo = require('./bar');",
+            "rust": "use std::collections::HashMap;",
+            "go": 'import "fmt"',
+            "java": "import java.util.List;",
+            "csharp": "using System.Collections.Generic;",
+            "php": "use App\\Models\\User;",
+            "ruby": "require 'rails'",
+            "c": '#include <stdio.h>',
+            "cpp": '#include <vector>',
+            "swift": "import Foundation",
+            "kotlin": "import java.util.List",
+            "scala": "import scala.collection.mutable",
+            "haskell": "import Data.List",
+            "dart": "import 'package:flutter/material.dart';",
+            "elixir": "alias MyApp.User",
+            "perl": "use strict;",
+            "lua": 'require("mymodule")',
+            "luau": 'require("mymodule")',
+            "groovy": "import java.util.List",
+            "julia": "using DataFrames",
+            "r": "library(dplyr)",
+            "gdscript": 'preload("res://player.gd")',
+            "gleam": "import gleam/list",
+            "fortran": "use iso_fortran_env",
+            "erlang": "-import(lists, [map/2]).",
+            "bash": "source ~/.bashrc",
+            "hcl": 'module "vpc" {',
+            "autohotkey": "#Include lib.ahk",
+            "solidity": 'import "@openzeppelin/contracts/token/ERC20/ERC20.sol";',
+            "zig": 'const std = @import("std");',
+            "powershell": "Import-Module ActiveDirectory",
+            "ocaml": "open List",
+            "fsharp": "open System",
+            "clojure": "(require '[clojure.string :as str])",
+            "elisp": "(require 'cl-lib)",
+            "nim": "import std/strutils",
+            "tcl": "source lib/utils.tcl",
+            "dlang": 'import std.stdio;',
+            "pascal": "uses SysUtils, Classes;",
+            "ada": "with Ada.Text_IO;",
+            "cobol": "      COPY LIBRARY.",
+            "commonlisp": "(require 'asdf)",
+            "matlab": "import matlab.io.*",
+            "apex": "import System.Logging;",
+            "sql": "{{ ref('my_model') }}",
+            "css": "@import 'variables.css';",
+            "scss": "@import 'variables';",
+            "proto": 'import "google/protobuf/any.proto";',
+            "graphql": "# import './fragments.graphql'",
+            "vhdl": "use ieee.std_logic_1164.all;",
+            "verilog": '`include "defs.vh"',
+            "asm": '.include "macros.asm"',
+            "razor": "@using MyApp.Models",
+            "blade": "@inject('App\\Services\\UserService')",
+            "al": "using System;",
+            "nix": "import ./config.nix",
+            "ejs": "<%- require('./partial') %>",
+            "verse": "using {/Fortnite/Devices}",
+        }
+
+        for lang, sample in sample_imports.items():
+            pattern = _IMPORT_PATTERNS.get(lang)
+            assert pattern is not None, f"No _IMPORT_PATTERN for '{lang}'"
+            assert pattern.match(sample), (
+                f"_IMPORT_PATTERN for '{lang}' does not match sample: '{sample}'"
+            )
+
+    def test_04_def_patterns_are_not_trivial(self):
+        """Definition patterns must match at least one known definition syntax."""
+        import re as re_module
+        from jcodemunch_mcp.tools.plan_refactoring import _DEF_PATTERNS
+
+        # Sample definitions for each language (using {name} = "Foo")
+        sample_defs = {
+            "python": "class Foo:",
+            "typescript": "class Foo {}",
+            "javascript": "class Foo {}",
+            "rust": "struct Foo {}",
+            "go": "func Foo() {}",
+            "java": "class Foo {}",
+            "csharp": "class Foo {}",
+            "php": "class Foo {}",
+            "ruby": "class Foo",
+            "c": "struct Foo {}",
+            "cpp": "class Foo {}",
+            "swift": "class Foo {}",
+            "kotlin": "class Foo {}",
+            "scala": "class Foo {}",
+            "haskell": "data Foo = Bar",
+            "dart": "class Foo {}",
+            "elixir": "defmodule Foo do",
+            "perl": "sub Foo {",
+            "lua": "function Foo()",
+            "luau": "function Foo()",
+            "groovy": "class Foo {}",
+            "julia": "struct Foo end",
+            "r": "Foo <- function() {}",
+            "gdscript": "func Foo():",
+            "gleam": "pub fn Foo() {}",
+            "fortran": "subroutine Foo()",
+            "erlang": "Foo()",  # Note: pattern uses {name}, substituted with "Foo"
+            "bash": "function Foo {",
+            "hcl": 'resource "aws_instance" "Foo" {',
+            "autohotkey": "class Foo {",
+            "solidity": "contract Foo {}",
+            "zig": "fn Foo() void {}",
+            "powershell": "function Foo {}",
+            "ocaml": "let Foo x = x",
+            "fsharp": "let Foo x = x",
+            "clojure": "(defn Foo [] nil)",
+            "elisp": "(defun Foo () nil)",
+            "nim": "proc Foo() =",
+            "tcl": "proc Foo {} {}",
+            "dlang": "class Foo {}",
+            "pascal": "procedure Foo;",
+            "ada": "procedure Foo is",
+            "cobol": "      PROGRAM-ID. Foo.",
+            "commonlisp": "(defun Foo () nil)",
+            "matlab": "function Foo()",
+            "apex": "class Foo {}",
+            "sql": "CREATE TABLE Foo (id INT)",
+            "css": ".Foo {",
+            "scss": ".Foo {",
+            "proto": "message Foo {}",
+            "graphql": "type Foo {}",
+            "vhdl": "entity Foo is",
+            "verilog": "module Foo();",
+            "asm": "Foo:",  # ASM labels end with colons, uses substituted name
+            "razor": "@functions {",
+            "blade": "@section('Foo')",
+            "al": "page Foo {}",
+            "nix": "Foo = {};",
+            "ejs": "<% function Foo() { %>",
+            "verse": "class Foo {}",
+        }
+
+        for lang, sample in sample_defs.items():
+            pattern = _DEF_PATTERNS.get(lang)
+            assert pattern is not None, f"No _DEF_PATTERN for '{lang}'"
+            # For patterns using {name}, substitute "Foo"
+            # Use replace() instead of format() to avoid issues with literal braces in patterns
+            if "{name}" in pattern.pattern:
+                concrete_pattern = re_module.compile(
+                    pattern.pattern.replace("{name}", re_module.escape("Foo"))
+                )
+            else:
+                concrete_pattern = pattern
+            assert concrete_pattern.match(sample), (
+                f"_DEF_PATTERN for '{lang}' does not match sample: '{sample}'"
+            )
+
+

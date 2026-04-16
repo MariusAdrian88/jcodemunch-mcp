@@ -63,6 +63,38 @@ _IMPORT_PATTERNS = {
     "gleam": re.compile(r"^\s*import\s+[\w/]"),
     "fortran": re.compile(r"^\s*use\s+\w+", re.IGNORECASE),
     "graphql": re.compile(r"^\s*#\s*import\s+"),  # graphql-import convention
+    # -- Tier 2 continued: missing languages --
+    "erlang": re.compile(r"^\s*-(?:import|include|include_lib|behaviour|behaviors?)\s*"),
+    "bash": re.compile(r"^\s*(?:source|\.)\s+"),
+    "hcl": re.compile(r'^\s*module\s+"[^"]*"\s+{'),
+    "autohotkey": re.compile(r"^\s*#Include", re.IGNORECASE),
+    "solidity": re.compile(r"^\s*import\s+"),
+    "zig": re.compile(r"^\s*(?:const|var)\s+\w+\s*=\s*@?import\s*\("),
+    "powershell": re.compile(r"^\s*(?:Import-Module|using\s+module)\s+", re.IGNORECASE),
+    "ocaml": re.compile(r"^\s*(?:open|include)\s+"),
+    "fsharp": re.compile(r"^\s*(?:open|module)\s+"),
+    "clojure": re.compile(r"^\s*\(\s*(?:require|import|use)\s+"),
+    "elisp": re.compile(r"^\s*\(\s*(?:require|load)\s+"),
+    "nim": re.compile(r"^\s*(?:import|from\s+\w+\s+import)\s+"),
+    "tcl": re.compile(r"^\s*(?:source|package\s+require)\s+"),
+    "dlang": re.compile(r"^\s*import\s+"),
+    "pascal": re.compile(r"^\s*(?:uses|unit)\s+", re.IGNORECASE),
+    "ada": re.compile(r"^\s*(?:with|use)\s+", re.IGNORECASE),
+    "cobol": re.compile(r"^\s*COPY\s+", re.IGNORECASE),
+    "commonlisp": re.compile(r"^\s*\(\s*(?:require|load|defpackage)\s+"),
+    "matlab": re.compile(r"^\s*(?:import|addpath)\s+"),
+    "apex": re.compile(r"^\s*import\s+"),
+    "css": re.compile(r"^\s*@import\s+"),
+    "scss": re.compile(r"^\s*@import\s+"),
+    "sass": re.compile(r"^\s*@import\s+"),
+    "less": re.compile(r"^\s*@import\s+"),
+    "styl": re.compile(r"^\s*@import\s+"),
+    "razor": re.compile(r"^\s*@\s*using\s+"),
+    "blade": re.compile(r"^\s*@\s*(?:inject|use)(?:\s+|\()"),
+    "al": re.compile(r"^\s*using\s+"),
+    "nix": re.compile(r"^\s*(?:import|with)\s+"),
+    "ejs": re.compile(r"<%[=-]?\s*(?:require|import)\s*"),
+    "verse": re.compile(r"^\s*(?:using|import)\s+"),
 }
 
 # Definition patterns per language
@@ -107,6 +139,38 @@ _DEF_PATTERNS = {
     "hcl": re.compile(r"^\s*(resource|data|module|variable|output)\s+\"[^\"]*\"\s+\"{name}\""),
     "graphql": re.compile(r"^\s*(type|query|mutation|subscription|interface|enum|scalar|union|input|fragment|directive)\s+{name}\b"),
     "autohotkey": re.compile(r"^\s*(class\s+{name}|{name}\s*\()"),
+    # -- Tier 2 continued: missing languages --
+    "solidity": re.compile(r"^\s*(?:contract|interface|library|function|struct|enum|event|modifier)\s+{name}\b"),
+    "zig": re.compile(r"^\s*(?:pub\s+)?(?:fn|const|var|struct|enum|union)\s+{name}\b"),
+    "powershell": re.compile(r"^\s*(?:function|filter|class|enum)\s+{name}\b", re.IGNORECASE),
+    "ocaml": re.compile(r"^\s*(?:let|type|module|class)\s+{name}\b"),
+    "fsharp": re.compile(r"^\s*(?:let|type|module|namespace|class)\s+{name}\b"),
+    "clojure": re.compile(r"^\s*\(\s*(?:defn|defmacro|def|defrecord)\s+{name}\b"),
+    "elisp": re.compile(r"^\s*\(\s*(?:defun|defmacro|defvar|defcustom)\s+{name}\b"),
+    "nim": re.compile(r"^\s*(?:proc|func|method|iterator|macro|template|type)\s+{name}\b"),
+    "tcl": re.compile(r"^\s*(?:proc|namespace\s+eval)\s+{name}\b"),
+    "dlang": re.compile(r"^\s*(?:class|struct|interface|enum|template|function)\s+{name}\b"),
+    "pascal": re.compile(r"^\s*(?:procedure|function|class|type)\s+{name}\b", re.IGNORECASE),
+    "ada": re.compile(r"^\s*(?:package|procedure|function|task|protected)\s+{name}\b", re.IGNORECASE),
+    "cobol": re.compile(r"^\s*PROGRAM-ID\.\s*{name}\b", re.IGNORECASE),
+    "commonlisp": re.compile(r"^\s*\(\s*(?:defun|defmacro|defclass|defmethod)\s+{name}\b"),
+    "matlab": re.compile(r"^\s*function\s+.*{name}\b"),
+    "apex": re.compile(r"^\s*(?:public|private|protected)?\s*(?:class|interface|enum|trigger)\s+{name}\b"),
+    "sql": re.compile(r"^\s*CREATE\s+(?:TABLE|VIEW|FUNCTION|PROCEDURE)\s+{name}\b", re.IGNORECASE),
+    "css": re.compile(r"^\s*\.{name}\s*\{|^\s*#{name}\s*\{|^\s*{name}\s*\{"),
+    "scss": re.compile(r"^\s*\.{name}\s*\{|^\s*#{name}\s*\{|^\s*{name}\s*\{|^\s*@mixin\s+{name}\b"),
+    "sass": re.compile(r"^\s*\.{name}\s*$|^\s*#{name}\s*$|^\s*{name}\s*$|^\s*=\\s*{name}\b"),
+    "less": re.compile(r"^\s*\.{name}\s*\{|^\s*#{name}\s*\{|^\s*{name}\s*\{|^\s*\.{name}\s*\("),
+    "styl": re.compile(r"^\s*\.{name}\s*$|^\s*#{name}\s*$|^\s*{name}\s*$"),
+    "razor": re.compile(r"^\s*@\s*(?:functions|code|page|inject)\s+"),
+    "blade": re.compile(r"^\s*@\s*(?:section|component|slot)\s*\(\s*['\"]{name}['\"]"),
+    "al": re.compile(r"^\s*(?:page|table|codeunit|report|query|enum)\s+{name}\b"),
+    "nix": re.compile(r"^\s*{name}\s*="),
+    "ejs": re.compile(r"<%[=-]?\s*(?:function|const\s+{name})"),
+    "verse": re.compile(r"^\s*(?:class|function|agent|device)\s+{name}\b"),
+    # -- Tier 3: vue and asm (vue uses JS/TS patterns, asm labels) --
+    "vue": re.compile(r"^\s*(export\s+)?(class|function|const|let|var|interface|type|enum)\s+{name}\b"),
+    "asm": re.compile(r"^\s*{name}\s*:"),
 }
 
 # Non-code file extensions for warning scans
@@ -828,6 +892,190 @@ def _compute_new_import(old_import_line, old_file, new_file, sym_name, language)
             return old_import_line.replace(old_mod, new_mod), None
         return old_import_line, f"Fortran module '{old_mod}' not found in use"
 
+    elif language == "r":
+        # R: library(old_name) -> library(new_name)
+        old_mod = PurePosixPath(old_file).stem
+        new_mod = PurePosixPath(new_file).stem
+        if old_mod in old_import_line:
+            return old_import_line.replace(old_mod, new_mod), None
+        return old_import_line, f"R module '{old_mod}' not found in library()"
+
+    elif language == "gdscript":
+        # GDScript: preload("old/path") -> preload("new/path")
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        old_stem = PurePosixPath(old_file).with_suffix("").as_posix()
+        new_stem = PurePosixPath(new_file).with_suffix("").as_posix()
+        if old_stem in old_import_line:
+            return old_import_line.replace(old_stem, new_stem), None
+        return old_import_line, f"GDScript path not found in preload()"
+
+    elif language == "bash":
+        # Bash: source old/path -> source new/path
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"Bash source path '{old_spec}' not found"
+
+    elif language == "autohotkey":
+        # AutoHotkey: #Include old/path -> #Include new/path
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"AutoHotkey include path '{old_spec}' not found"
+
+    elif language in ("css", "scss", "sass", "less", "styl"):
+        # CSS family: @import "old/path" -> @import "new/path"
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"{language} import path '{old_spec}' not found"
+
+    elif language in ("solidity", "dlang"):
+        # Solidity/D: import "old/path" -> import "new/path"
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"{language} import path '{old_spec}' not found"
+
+    elif language == "zig":
+        # Zig: const x = @import("old/path") -> const x = @import("new/path")
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"Zig import path '{old_spec}' not found"
+
+    elif language == "powershell":
+        # PowerShell: Import-Module Old -> Import-Module New
+        old_mod = PurePosixPath(old_file).stem
+        new_mod = PurePosixPath(new_file).stem
+        if old_mod in old_import_line:
+            return old_import_line.replace(old_mod, new_mod), None
+        return old_import_line, f"PowerShell module '{old_mod}' not found"
+
+    elif language in ("ocaml", "fsharp"):
+        # OCaml/F#: open OldModule -> open NewModule
+        old_mod = ".".join(PurePosixPath(old_file).with_suffix("").parts[-2:])
+        new_mod = ".".join(PurePosixPath(new_file).with_suffix("").parts[-2:])
+        if old_mod in old_import_line:
+            return old_import_line.replace(old_mod, new_mod), None
+        return old_import_line, f"{language} module '{old_mod}' not found"
+
+    elif language == "clojure":
+        # Clojure: (require '[old.ns]) -> (require '[new.ns])
+        old_ns = PurePosixPath(old_file).with_suffix("").as_posix().replace("/", ".")
+        new_ns = PurePosixPath(new_file).with_suffix("").as_posix().replace("/", ".")
+        if old_ns in old_import_line:
+            return old_import_line.replace(old_ns, new_ns), None
+        return old_import_line, f"Clojure namespace '{old_ns}' not found"
+
+    elif language in ("elisp", "commonlisp"):
+        # Elisp/Common Lisp: (require 'old-module) -> (require 'new-module)
+        old_mod = PurePosixPath(old_file).stem
+        new_mod = PurePosixPath(new_file).stem
+        if old_mod in old_import_line:
+            return old_import_line.replace(old_mod, new_mod), None
+        return old_import_line, f"{language} module '{old_mod}' not found"
+
+    elif language == "nim":
+        # Nim: import old/module -> import new/module
+        old_spec = PurePosixPath(old_file).with_suffix("").as_posix().replace("/", ".")
+        new_spec = PurePosixPath(new_file).with_suffix("").as_posix().replace("/", ".")
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"Nim module '{old_spec}' not found"
+
+    elif language == "tcl":
+        # Tcl: source old/path -> source new/path
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"Tcl source path '{old_spec}' not found"
+
+    elif language == "pascal":
+        # Pascal: uses OldUnit -> uses NewUnit
+        old_unit = PurePosixPath(old_file).stem
+        new_unit = PurePosixPath(new_file).stem
+        if old_unit in old_import_line:
+            return old_import_line.replace(old_unit, new_unit), None
+        return old_import_line, f"Pascal unit '{old_unit}' not found"
+
+    elif language == "ada":
+        # Ada: with Old_Package -> with New_Package
+        old_pkg = PurePosixPath(old_file).with_suffix("").as_posix().replace("/", ".")
+        new_pkg = PurePosixPath(new_file).with_suffix("").as_posix().replace("/", ".")
+        if old_pkg in old_import_line:
+            return old_import_line.replace(old_pkg, new_pkg), None
+        return old_import_line, f"Ada package '{old_pkg}' not found"
+
+    elif language == "cobol":
+        # COBOL: COPY old-file -> COPY new-file (physical file reference)
+        old_spec = PurePosixPath(old_file).stem.upper()
+        new_spec = PurePosixPath(new_file).stem.upper()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"COBOL COPY file '{old_spec}' not found"
+
+    elif language == "matlab":
+        # MATLAB: import old.pkg.* -> import new.pkg.*
+        old_pkg = PurePosixPath(old_file).with_suffix("").as_posix().replace("/", ".")
+        new_pkg = PurePosixPath(new_file).with_suffix("").as_posix().replace("/", ".")
+        if old_pkg in old_import_line:
+            return old_import_line.replace(old_pkg, new_pkg), None
+        return old_import_line, f"MATLAB package '{old_pkg}' not found"
+
+    elif language == "apex":
+        # Apex: import old.pkg.Class -> import new.pkg.Class
+        old_pkg = PurePosixPath(old_file).with_suffix("").as_posix().replace("/", ".")
+        new_pkg = PurePosixPath(new_file).with_suffix("").as_posix().replace("/", ".")
+        if old_pkg in old_import_line:
+            return old_import_line.replace(old_pkg, new_pkg), None
+        return old_import_line, f"Apex package '{old_pkg}' not found"
+
+    elif language == "sql":
+        # SQL/dbt: {{ ref('model') }} — warn only, can't auto-rewrite
+        return old_import_line, "SQL/dbt ref() cannot be auto-rewritten; manual update required"
+
+    elif language == "graphql":
+        # GraphQL: # import 'path' — convention-based, warn only
+        return old_import_line, "GraphQL imports are convention-based; manual update required"
+
+    elif language == "hcl":
+        # HCL/Terraform: module "name" { source = "..." } — warn only
+        return old_import_line, "HCL/Terraform module source cannot be auto-rewritten; manual update required"
+
+    elif language in ("razor", "blade", "ejs"):
+        # Template engines: mixed syntax, path-based rewrite
+        old_spec = PurePosixPath(old_file).as_posix()
+        new_spec = PurePosixPath(new_file).as_posix()
+        if old_spec in old_import_line:
+            return old_import_line.replace(old_spec, new_spec), None
+        return old_import_line, f"{language} import path not found"
+
+    elif language in ("al", "nix", "verse"):
+        # AL/Nix/Verse: module-based, stem rewrite
+        old_mod = PurePosixPath(old_file).stem
+        new_mod = PurePosixPath(new_file).stem
+        if old_mod in old_import_line:
+            return old_import_line.replace(old_mod, new_mod), None
+        return old_import_line, f"{language} module '{old_mod}' not found"
+
+    elif language == "erlang":
+        # Erlang: -import(Module, [Func/Arity]) -> -import(NewModule, ...)
+        old_mod = PurePosixPath(old_file).stem
+        new_mod = PurePosixPath(new_file).stem
+        if old_mod in old_import_line:
+            return old_import_line.replace(old_mod, new_mod), None
+        return old_import_line, f"Erlang module '{old_mod}' not found"
+
     return old_import_line, f"Unsupported language '{language}' for import rewrite"
 
 
@@ -907,6 +1155,50 @@ def _format_import_line(imp_dict, language):
         return f'preload("{spec}")'
     elif language == "graphql":
         return f'# import {spec}'
+    elif language in ("css", "scss", "sass", "less", "styl"):
+        return f"@import '{spec}';"
+    elif language == "solidity":
+        return f'import "{spec}";'
+    elif language == "zig":
+        return f'const {names[0] if names else "mod"} = @import("{spec}");'
+    elif language == "powershell":
+        return f"Import-Module {spec}"
+    elif language in ("ocaml", "fsharp"):
+        return f"open {spec}"
+    elif language == "clojure":
+        if names:
+            return f"(:require [{spec} :refer [{', '.join(names)}]])"
+        return f"(:require [{spec}])"
+    elif language in ("elisp", "commonlisp"):
+        return f"(require '{spec})"
+    elif language == "nim":
+        return f"import {spec}"
+    elif language == "tcl":
+        return f"source {spec}"
+    elif language == "dlang":
+        return f'import {spec};'
+    elif language == "pascal":
+        return f"uses {spec};"
+    elif language == "ada":
+        return f"with {spec};"
+    elif language == "cobol":
+        return f"      COPY {spec}."
+    elif language == "matlab":
+        return f"import {spec}.*"
+    elif language == "apex":
+        return f"import {spec};"
+    elif language == "sql":
+        return f"{{{{ ref('{spec}') }}}}"
+    elif language == "hcl":
+        return f'module "{spec}" {{}}'
+    elif language == "autohotkey":
+        return f"#Include {spec}"
+    elif language in ("razor", "blade", "ejs"):
+        return f"@import '{spec}'"
+    elif language in ("al", "nix", "verse"):
+        return f"import {spec}"
+    elif language == "erlang":
+        return f"-import({spec}, [])."
     return f"import {spec}"
 
 

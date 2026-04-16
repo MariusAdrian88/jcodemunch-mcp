@@ -655,8 +655,11 @@ class TestIntegration:
     def _index_project(self, tmp_path):
         """Index the project and return (repo_id, storage_path)."""
         from jcodemunch_mcp.tools.index_folder import index_folder
-        result = index_folder(str(tmp_path))
+        store = tmp_path / "store"
+        store.mkdir()
+        result = index_folder(str(tmp_path), use_ai_summaries=False, storage_path=str(store))
         assert result.get("success"), f"index_folder failed: {result}"
+        result["storage_path"] = str(store)
         return result
 
     def test_full_pipeline(self, tmp_path):
@@ -664,7 +667,7 @@ class TestIntegration:
         idx_result = self._index_project(proj)
         repo = idx_result["repo"]
 
-        result = get_project_intel(repo)
+        result = get_project_intel(repo, storage_path=idx_result["storage_path"])
         assert "error" not in result
         assert result["file_count"] >= 3  # Dockerfile, .env.example, package.json, pyproject.toml
         assert result["category_count"] >= 1
@@ -691,7 +694,7 @@ class TestIntegration:
         idx_result = self._index_project(proj)
         repo = idx_result["repo"]
 
-        result = get_project_intel(repo, category="config")
+        result = get_project_intel(repo, category="config", storage_path=idx_result["storage_path"])
         assert "error" not in result
         # Only config category should be present
         assert "config" in result["categories"]
@@ -703,7 +706,7 @@ class TestIntegration:
         idx_result = self._index_project(proj)
         repo = idx_result["repo"]
 
-        result = get_project_intel(repo)
+        result = get_project_intel(repo, storage_path=idx_result["storage_path"])
         # Should find Dockerfile ENTRYPOINT -> src/main.py
         xrefs = result.get("cross_references", [])
         entrypoint_refs = [r for r in xrefs if r["type"] == "entrypoint"]
@@ -714,7 +717,7 @@ class TestIntegration:
         idx_result = self._index_project(proj)
         repo = idx_result["repo"]
 
-        result = get_project_intel(repo, category="bogus")
+        result = get_project_intel(repo, category="bogus", storage_path=idx_result["storage_path"])
         assert "error" in result
 
     def test_nonexistent_repo(self):
@@ -732,10 +735,12 @@ class TestEdgeCases:
         (src / "main.py").write_text("x = 1\n")
 
         from jcodemunch_mcp.tools.index_folder import index_folder
-        result = index_folder(str(tmp_path))
+        store = tmp_path / "store"
+        store.mkdir()
+        result = index_folder(str(tmp_path), use_ai_summaries=False, storage_path=str(store))
         assert result.get("success")
 
-        intel = get_project_intel(result["repo"])
+        intel = get_project_intel(result["repo"], storage_path=str(store))
         assert "error" not in intel
         assert intel["file_count"] == 0
 
@@ -763,10 +768,12 @@ class TestEdgeCases:
         (src / "main.py").write_text("x = 1\n")
 
         from jcodemunch_mcp.tools.index_folder import index_folder
-        result = index_folder(str(tmp_path))
+        store = tmp_path / "store"
+        store.mkdir()
+        result = index_folder(str(tmp_path), use_ai_summaries=False, storage_path=str(store))
         assert result.get("success")
 
-        intel = get_project_intel(result["repo"])
+        intel = get_project_intel(result["repo"], storage_path=str(store))
         assert "_meta" in intel
         assert "timing_ms" in intel["_meta"]
         assert "source_root" in intel["_meta"]
@@ -784,10 +791,12 @@ class TestReturnShape:
         (tmp_path / "Dockerfile").write_text("FROM alpine\n")
 
         from jcodemunch_mcp.tools.index_folder import index_folder
-        result = index_folder(str(tmp_path))
+        store = tmp_path / "store"
+        store.mkdir()
+        result = index_folder(str(tmp_path), use_ai_summaries=False, storage_path=str(store))
         assert result.get("success")
 
-        intel = get_project_intel(result["repo"])
+        intel = get_project_intel(result["repo"], storage_path=str(store))
         assert "repo" in intel
         assert "categories" in intel
         assert "cross_references" in intel
