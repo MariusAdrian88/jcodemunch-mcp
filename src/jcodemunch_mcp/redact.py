@@ -15,6 +15,7 @@ Disable with ``"redact_response_secrets": false`` in config.jsonc or
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 from typing import Any
@@ -59,9 +60,11 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
     ("jwt", re.compile(
         r"(?P<secret>eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]{10,})"
     )),
-    # Generic bearer tokens (Authorization: Bearer ...)
+    # Bearer tokens in Authorization-header form.
+    # Anchored to structural context (HTTP-style header or capital `Bearer `)
+    # to avoid matching identifiers like `refresh_token some_var_name`.
     ("bearer_token", re.compile(
-        r"(?i)(?:bearer|token)\s+(?P<secret>[A-Za-z0-9_\-\.]{20,})"
+        r"(?:(?i:authorization)\s*[:=]\s*)?Bearer\s+(?P<secret>[A-Za-z0-9_\-\.]{20,})"
     )),
     # GitHub personal access tokens (ghp_, gho_, ghu_, ghs_, ghr_)
     ("github_token", re.compile(
@@ -92,6 +95,22 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 
+# Minimum Shannon entropy (bits per char) for the generic_api_key secret
+# candidate. Real high-entropy tokens sit well above 3.5; typical code
+# identifiers (snake_case_value_names) fall below.
+_MIN_ENTROPY_BITS = 3.5
+
+
+def _shannon_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in s:
+        counts[ch] = counts.get(ch, 0) + 1
+    length = len(s)
+    return -sum((c / length) * math.log2(c / length) for c in counts.values())
+
+
 def _redact_string(text: str) -> tuple[str, int]:
     """Scan a single string for secrets and return (redacted_text, count).
 
@@ -101,6 +120,23 @@ def _redact_string(text: str) -> tuple[str, int]:
     for label, pattern in _PATTERNS:
         def _replacer(m: re.Match, _label: str = label) -> str:
             nonlocal count
+            # For generic_api_key, avoid scrubbing identifier-shaped values
+            # like `api_key: DEFAULT_CONFIG_IDENTIFIER_CONSTANT`. Real secrets
+            # almost always mix cases and digits; SCREAMING_CASE and
+            # snake_case identifiers do not. Require all three character
+            # classes AND high entropy.
+            if _label == "generic_api_key":
+                try:
+                    candidate = m.group("secret")
+                    has_lower = any(c.islower() for c in candidate)
+                    has_upper = any(c.isupper() for c in candidate)
+                    has_digit = any(c.isdigit() for c in candidate)
+                    if not (has_lower and has_upper and has_digit):
+                        return m.group()
+                    if _shannon_entropy(candidate) < _MIN_ENTROPY_BITS:
+                        return m.group()
+                except IndexError:
+                    pass
             count += 1
             try:
                 secret = m.group("secret")
@@ -124,6 +160,12 @@ def redact_dict(data: Any, _depth: int = 0) -> tuple[Any, int]:
     Caps recursion at depth 20 to prevent pathological nesting.
     """
     if _depth > 20:
+        # Don't return raw data past the cap — that would leak secrets we were
+        # asked to scrub. Collapse strings and containers to a sentinel.
+        if isinstance(data, str) and len(data) >= 16:
+            return "[REDACTED:depth_exceeded]", 1
+        if isinstance(data, (dict, list)):
+            return "[REDACTED:depth_exceeded]", 1
         return data, 0
 
     total = 0
@@ -131,9 +173,24 @@ def redact_dict(data: Any, _depth: int = 0) -> tuple[Any, int]:
     if isinstance(data, dict):
         result = {}
         for key, value in data.items():
-            # Skip _meta and known-safe structural keys
-            if key == "_meta":
-                result[key] = value
+            # Inside _meta, bypass only scalar numeric/bool fields (timings,
+            # counters). Strings and nested containers still get scanned —
+            # secrets can land in _meta.hint, _meta.error, etc.
+            # `source` and `content` carry raw code payloads from
+            # get_symbol_source / get_file_content. The bearer_token pattern
+            # is now header-anchored and generic_api_key is entropy-gated, so
+            # normal code traverses cleanly; we still scan them for the
+            # anchored high-confidence patterns (AWS keys, PEM blocks, etc.).
+            if key == "_meta" and isinstance(value, dict):
+                meta_result: dict = {}
+                for mk, mv in value.items():
+                    if isinstance(mv, (int, float, bool)) or mv is None:
+                        meta_result[mk] = mv
+                    else:
+                        redacted, count = redact_dict(mv, _depth + 1)
+                        meta_result[mk] = redacted
+                        total += count
+                result[key] = meta_result
                 continue
             redacted, count = redact_dict(value, _depth + 1)
             result[key] = redacted
