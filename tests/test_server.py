@@ -387,14 +387,15 @@ async def test_call_tool_validation_error_returns_json_error():
 
 @pytest.mark.asyncio
 async def test_call_tool_unexpected_coerce_error_returns_json():
-    """Unexpected errors return a generic message — raw exception text must not leak to clients."""
+    """Unexpected errors return a generic error plus a short client-facing summary."""
     with patch("jcodemunch_mcp.server._ensure_tool_schemas", side_effect=RuntimeError("boom")):
         result = await call_tool("index_folder", {"path": "/tmp"})
 
     assert len(result) == 1
     payload = json.loads(result[0].text)
     assert "error" in payload
-    # Raw exception message must NOT appear in the client response (S3 hardening)
+    assert payload["summary"] == "RuntimeError: boom"
+    # The top-level error stays generic even when the summary is exposed.
     assert "boom" not in payload["error"]
     assert "index_folder" in payload["error"]
 

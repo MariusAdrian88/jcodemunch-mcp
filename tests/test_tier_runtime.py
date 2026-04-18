@@ -473,6 +473,7 @@ async def test_plan_turn_model_does_not_switch_tier_when_plan_turn_errors(adapti
         text = result[0].text if hasattr(result[0], "text") else result[0]
         data = json.loads(text)
         assert "error" in data
+        assert data["summary"] == "RuntimeError: boom"
         assert server_mod._session_tier_override is None
     finally:
         config_mod._GLOBAL_CONFIG.clear()

@@ -3742,9 +3742,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     except KeyError as e:
         return [TextContent(type="text", text=json.dumps({"error": f"Missing required argument: {e}. Check the tool schema for correct parameter names."}, separators=(',', ':')))]
-    except Exception:
+    except Exception as exc:
         logger.error("call_tool %s failed", name, exc_info=True)
-        return [TextContent(type="text", text=json.dumps({"error": f"Internal error processing {name}"}, separators=(',', ':')))]
+        summary = " ".join((str(exc).strip().splitlines() or [""])[0].split())
+        summary = f"{type(exc).__name__}: {summary}" if summary else type(exc).__name__
+        if len(summary) > 200:
+            summary = f"{summary[:197].rstrip()}..."
+        payload = {
+            "error": f"Internal error processing {name}",
+            "summary": summary,
+        }
+        return [TextContent(type="text", text=json.dumps(payload, separators=(',', ':')))]
 
 
 async def _run_server_with_watcher(
