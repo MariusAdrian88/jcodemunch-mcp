@@ -378,17 +378,28 @@ def _render_call_hierarchy(source: dict, pal: Palette, max_nodes: int) -> dict:
         lines.append("  end")
 
     # Edges with confidence styling
+    root_id = sym.get("id", "__root__")
     for a, b in surviving_edges:
         a_nd = node_map.get(a)
         b_nd = node_map.get(b)
         if not a_nd or not b_nd:
             continue
-        # Find resolution tier for this edge
+        # Find resolution tier for this edge. Caller edges point INTO the root
+        # (b == root_id); callee edges point OUT (a == root_id). Scanning the
+        # combined list and picking whichever id matched first could surface
+        # the wrong direction's resolution when the same symbol appears as
+        # both a caller and callee (mutual recursion) — audit finding F7.
         resolution = "text_matched"
-        for c in source.get("callers", []) + source.get("callees", []):
-            if c.get("id") in (a, b):
-                resolution = c.get("resolution", "text_matched")
-                break
+        if b == root_id:
+            for c in source.get("callers", []):
+                if c.get("id") == a:
+                    resolution = c.get("resolution", "text_matched")
+                    break
+        else:
+            for c in source.get("callees", []):
+                if c.get("id") == b:
+                    resolution = c.get("resolution", "text_matched")
+                    break
         color = pal.edge_confidence.get(resolution, "#999")
         dash = pal.edge_dash.get(resolution, "0")
         lines.append(f'  {a_nd} --> {b_nd}')
@@ -849,15 +860,23 @@ def _render_blast_radius(source: dict, pal: Palette, max_nodes: int) -> dict:
     edge_count = 0
     pruned = 0
 
-    # Confirmed files — group by depth if available
+    # Confirmed files — group by depth if available. Honor max_nodes per
+    # depth bucket so a large impact_by_depth payload doesn't blow past the
+    # caller's budget (audit finding F8).
     impact_by_depth = source.get("impact_by_depth", {})
     if impact_by_depth:
         for depth_str in sorted(impact_by_depth.keys(), key=lambda x: int(x)):
             depth_files = impact_by_depth[depth_str]
+            remaining = max_nodes - node_count
+            if remaining <= 0:
+                pruned += len(depth_files)
+                continue
+            shown = depth_files[:remaining]
+            pruned += max(0, len(depth_files) - len(shown))
             sg_label = _sanitize_label(f"Depth {depth_str} — {'Direct' if depth_str == '1' else 'Transitive'}")
             sg_id = f"depth{depth_str}"
             lines.append(f'  subgraph {sg_id}["{sg_label}"]')
-            for finfo in depth_files:
+            for finfo in shown:
                 fpath = finfo if isinstance(finfo, str) else finfo.get("file", str(finfo))
                 nd = _node_id(nid)
                 nid += 1

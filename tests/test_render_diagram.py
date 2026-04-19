@@ -316,6 +316,35 @@ class TestRenderCallHierarchy:
         assert "error" not in result
         assert "handle" in result["mermaid"]
 
+    def test_mutual_recursion_edge_resolution_per_direction(self):
+        """Audit F7: same symbol as both caller and callee — edges must pick
+        the direction-specific resolution, not whichever id happens to match
+        first when the two lists are concatenated."""
+        # "peer.py::ping" calls into `handle` (caller, text_matched) and
+        # `handle` calls back out (callee, lsp_resolved). The resolution
+        # styling on the two edges must differ.
+        data = _call_hierarchy_data(
+            callers=[
+                {"id": "peer.py::ping", "name": "ping", "kind": "function",
+                 "file": "peer.py", "line": 1, "depth": 1,
+                 "resolution": "text_matched"},
+            ],
+            callees=[
+                {"id": "peer.py::ping", "name": "ping", "kind": "function",
+                 "file": "peer.py", "line": 1, "depth": 1,
+                 "resolution": "lsp_resolved"},
+            ],
+            caller_count=1,
+            callee_count=1,
+        )
+        mermaid = render_diagram(data)["mermaid"]
+        # Two distinct edges exist; their link-styles must use distinct colors.
+        link_style_lines = [ln for ln in mermaid.splitlines() if "linkStyle" in ln]
+        assert len(link_style_lines) >= 2
+        colors = {ln.split("stroke:")[1].split(",")[0].strip()
+                  for ln in link_style_lines if "stroke:" in ln}
+        assert len(colors) >= 2, f"expected distinct edge colors, got {colors}"
+
 
 # ── Renderer tests: signal_chains ───────────────────────────────────────────
 
@@ -424,6 +453,25 @@ class TestRenderBlastRadius:
     def test_risk_theme(self):
         result = render_diagram(_blast_radius_data(), theme="risk")
         assert "FF4136" in result["mermaid"] or "FF851B" in result["mermaid"]
+
+    def test_impact_by_depth_honors_max_nodes(self):
+        """Audit F8: blast_radius rendering with impact_by_depth payload must
+        clip to max_nodes rather than render every file regardless of cap."""
+        depth_files = {
+            "1": [f"dir/file1_{i}.py" for i in range(40)],
+            "2": [f"dir/file2_{i}.py" for i in range(40)],
+            "3": [f"dir/file3_{i}.py" for i in range(40)],
+        }
+        data = _blast_radius_data(impact_by_depth=depth_files, potential=[])
+        result = render_diagram(data, max_nodes=25)
+        node_count = result.get("node_count", 0)
+        pruned = result.get("pruned_count", 0)
+        assert node_count <= 25, f"node_count={node_count} exceeds max_nodes=25"
+        # Every impact_by_depth file is accounted for as either shown or pruned.
+        total_in = sum(len(v) for v in depth_files.values()) + 1  # + target
+        assert node_count + pruned == total_in, (
+            f"node_count={node_count} + pruned={pruned} != total_in={total_in}"
+        )
 
 
 # ── Renderer tests: dependency_graph ────────────────────────────────────────
