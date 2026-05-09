@@ -14,6 +14,12 @@ from ..parser.symbols import Symbol
 logger = logging.getLogger(__name__)
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+_MANAGED_OPENAI_COMPAT_BASES = {
+    "https://api.openai.com/v1",
+    "https://api.minimax.io/v1",
+    "https://api.z.ai/api/paas/v4",
+    "https://openrouter.ai/api/v1",
+}
 _AUTO_DETECT_ORDER = [
     ("ANTHROPIC_API_KEY", "anthropic"),
     ("GOOGLE_API_KEY", "gemini"),
@@ -32,6 +38,11 @@ def _is_localhost_url(url: str) -> bool:
         return parsed.hostname in _LOCALHOST_HOSTS
     except Exception:
         return False
+
+
+def _is_managed_openai_compat_url(url: str) -> bool:
+    """Return True for built-in hosted OpenAI-compatible provider endpoints."""
+    return url.rstrip("/").lower() in _MANAGED_OPENAI_COMPAT_BASES
 
 
 def extract_summary_from_docstring(docstring: str) -> str:
@@ -388,9 +399,13 @@ class OpenAIBatchSummarizer(BaseSummarizer):
         self.api_base = api_base.rstrip("/") if api_base else None
         if self.api_base:
             # Strip trailing slash if present
-            # Security: restrict to localhost unless explicitly overridden
+            # Security: restrict custom remote endpoints unless explicitly overridden.
             allow_remote = _config.get("allow_remote_summarizer", False)
-            if not _is_localhost_url(self.api_base) and not allow_remote:
+            if (
+                not _is_localhost_url(self.api_base)
+                and not _is_managed_openai_compat_url(self.api_base)
+                and not allow_remote
+            ):
                 logger.warning(
                     "OPENAI_API_BASE points to non-localhost URL (%s). "
                     "Ignoring for security. Set JCODEMUNCH_ALLOW_REMOTE_SUMMARIZER=1 to allow.",
@@ -647,7 +662,7 @@ def _create_summarizer() -> Optional[BaseSummarizer]:
             s = _make_openai_compat(
                 api_key=os.environ.get("OPENROUTER_API_KEY"),
                 base_url="https://openrouter.ai/api/v1",
-                model=model_override or "meta-llama/llama-3.3-70b-instruct:free",
+                model=model_override or "nvidia/nemotron-3-nano-30b-a3b:free",
             )
         except ValueError:
             return None

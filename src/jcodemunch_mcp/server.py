@@ -5084,7 +5084,7 @@ def _run_config(check: bool = False, init: bool = False, upgrade: bool = False) 
         suffix = "JCODEMUNCH_SUMMARIZER_PROVIDER=openrouter" if provider == "openrouter" else "OPENROUTER_API_KEY set"
         print(f"  Active provider:  {green('OpenRouter')}  ({suffix})")
         row("  OPENAI_API_BASE", "https://openrouter.ai/api/v1", "default")
-        row("  OPENAI_MODEL", "meta-llama/llama-3.3-70b-instruct:free", "default")
+        row("  OPENAI_MODEL", "nvidia/nemotron-3-nano-30b-a3b:free", "default")
     elif provider == "none":
         print(f"  Active provider:  {yellow('none')} — explicitly disabled, signature fallback active")
     else:

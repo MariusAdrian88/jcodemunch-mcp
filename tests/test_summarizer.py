@@ -777,7 +777,7 @@ def test_openai_summarizer_openrouter_provider_defaults():
             _cfg_module._GLOBAL_CONFIG["allow_remote_summarizer"] = True
             with patch.object(OpenAIBatchSummarizer, "_init_client"):
                 summarizer = OpenAIBatchSummarizer(
-                    model="meta-llama/llama-3.3-70b-instruct:free",
+                    model="nvidia/nemotron-3-nano-30b-a3b:free",
                     api_base="https://openrouter.ai/api/v1",
                     api_key="test-key",
                 )
@@ -803,7 +803,7 @@ def test_openai_summarizer_openrouter_provider_defaults():
 
     mock_client.post.assert_called_once()
     assert mock_client.post.call_args[0][0] == "https://openrouter.ai/api/v1/chat/completions"
-    assert mock_client.post.call_args[1]["json"]["model"] == "meta-llama/llama-3.3-70b-instruct:free"
+    assert mock_client.post.call_args[1]["json"]["model"] == "nvidia/nemotron-3-nano-30b-a3b:free"
     assert symbols[0].summary == "Uses the OpenRouter endpoint."
 
 
@@ -983,6 +983,32 @@ def test_create_summarizer_auto_mode_detects_provider(monkeypatch):
     assert s is not None
     assert isinstance(s, OpenAIBatchSummarizer)
     assert s.model == "glm-5"
+
+
+def test_create_summarizer_openrouter_managed_endpoint_allowed_without_override(monkeypatch):
+    """OpenRouter should initialize without the remote override because it uses a managed endpoint."""
+    for key in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_BASE", "MINIMAX_API_KEY", "ZHIPUAI_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def fake_init_client(self):
+        self.client = object()
+
+    with patch.object(OpenAIBatchSummarizer, "_init_client", fake_init_client), patch(
+        "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+        side_effect=lambda k, d=None: (
+            "auto" if k == "use_ai_summaries"
+            else "" if k == "summarizer_model"
+            else False if k == "allow_remote_summarizer"
+            else d
+        ),
+    ):
+        s = _create_summarizer()
+
+    assert s is not None
+    assert isinstance(s, OpenAIBatchSummarizer)
+    assert s.api_base == "https://openrouter.ai/api/v1"
+    assert s.model == "nvidia/nemotron-3-nano-30b-a3b:free"
 
 
 def test_create_summarizer_model_override_applied_to_glm(monkeypatch):
