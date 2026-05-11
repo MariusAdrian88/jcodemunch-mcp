@@ -159,7 +159,7 @@ class TestComposeDigestErrors:
 
         result = digest_mod.compose_digest("anything")
         assert "error" in result
-        assert "not indexed" in result["error"]
+        assert "not loadable" in result["error"]
 
 
 class TestStateFileHelpers:
