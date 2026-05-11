@@ -854,6 +854,26 @@ class IndexStore:
                 repo_entry["source_root"] = remap(data["source_root"], _pairs if _pairs is not None else parse_path_map())
         return repo_entry
 
+    def _try_json_fallback(
+        self,
+        slug: str,
+        _pairs,
+        json_files_to_migrate: list[Path],
+    ) -> Optional[dict]:
+        """Return a legacy JSON listing entry when SQLite is unloadable."""
+        json_path = self.base_path / f"{slug}.json"
+        if not json_path.exists():
+            return None
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entry = self._repo_entry_from_data(data, _pairs)
+            if entry:
+                json_files_to_migrate.append(json_path)
+            return entry
+        except Exception:
+            return None
+
     def list_repos(self) -> list[dict]:
         """List all indexed repositories (SQLite + legacy JSON)."""
         repos = []
@@ -870,18 +890,10 @@ class IndexStore:
             seen_slugs.add(slug)
             try:
                 entry = self._sqlite._list_repo_from_db(db_file, _pairs)
-                json_path = self.base_path / f"{slug}.json"
-                if entry and entry.get("loadable") is False and json_path.exists():
-                    try:
-                        with open(json_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                        json_entry = self._repo_entry_from_data(data, _pairs)
-                        if json_entry:
-                            repos.append(json_entry)
-                            json_files_to_migrate.append(json_path)
-                            continue
-                    except Exception:
-                        pass
+                if entry and entry.get("loadable") is False:
+                    if json_entry := self._try_json_fallback(slug, _pairs, json_files_to_migrate):
+                        repos.append(json_entry)
+                        continue
                 if entry:
                     repos.append(entry)
             except Exception:
@@ -893,18 +905,9 @@ class IndexStore:
                     "repo": status.repo,
                     **status.as_fields(include_empty=True),
                 }
-                json_path = self.base_path / f"{slug}.json"
-                if json_path.exists():
-                    try:
-                        with open(json_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                        json_entry = self._repo_entry_from_data(data, _pairs)
-                        if json_entry:
-                            repos.append(json_entry)
-                            json_files_to_migrate.append(json_path)
-                            continue
-                    except Exception:
-                        pass
+                if json_entry := self._try_json_fallback(slug, _pairs, json_files_to_migrate):
+                    repos.append(json_entry)
+                    continue
                 repos.append(entry)
 
         # Pass 2: legacy JSON — eagerly migrate to SQLite so that every

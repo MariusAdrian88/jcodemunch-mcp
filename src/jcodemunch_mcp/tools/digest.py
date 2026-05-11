@@ -132,9 +132,7 @@ def compose_digest(
     store = IndexStore(base_path=storage_path)
     index = store.load_index(owner, name)
     if not index:
-        if hasattr(store, "inspect_index"):
-            return index_status_to_tool_error(store.inspect_index(owner, name))
-        return {"error": f"Repository index is not loadable: {owner}/{name}"}
+        return index_status_to_tool_error(store.inspect_index(owner, name))
 
     state_path = _state_path(owner, name, storage_path)
     state = _read_state(state_path)
