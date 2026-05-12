@@ -44,6 +44,14 @@ class IdentityDecision(NamedTuple):
     walk_root: str
 
 
+class IdentityModeConflict(ValueError):
+    """Raised when an existing index blocks an explicit identity-mode switch."""
+
+
+class IdentityModeAmbiguous(ValueError):
+    """Raised when both local and git identity forms match a path."""
+
+
 def _local_repo_name(folder_path: Path) -> str:
     digest = hashlib.sha1(str(folder_path).encode("utf-8")).hexdigest()[:8]
     return f"{folder_path.name}-{digest}"
@@ -71,11 +79,14 @@ def _existing_git_identity(path: Path, store) -> Optional[IdentityDecision]:
         if "/" not in repo_id:
             continue
         owner, name = repo_id.split("/", 1)
-        try:
-            index = store.load_index(owner, name)
-        except Exception:
-            index = None
-        git_root = getattr(index, "git_root", "") if index is not None else ""
+        if "git_root" in entry:
+            git_root = entry.get("git_root", "") or ""
+        else:
+            try:
+                index = store.load_index(owner, name)
+            except Exception:
+                index = None
+            git_root = getattr(index, "git_root", "") if index is not None else ""
         if _contains_path(git_root, path):
             return IdentityDecision(
                 mode="git",
@@ -85,6 +96,47 @@ def _existing_git_identity(path: Path, store) -> Optional[IdentityDecision]:
                 walk_root=str(Path(git_root).resolve()),
             )
     return None
+
+
+def _configured_identity_mode(folder_path: Path) -> str:
+    try:
+        from .. import config as _config
+        configured = _config.get("identity_mode", None, repo=str(folder_path))
+        if isinstance(configured, str) and configured in {"local", "git"}:
+            return configured
+        if _config.get("git_root_identity", False, repo=str(folder_path)):
+            return "git"
+    except Exception:
+        pass
+    return "local"
+
+
+def _identity_conflict_message(existing: IdentityDecision, requested: str) -> str:
+    return (
+        f"Existing index {existing.owner}/{existing.name} uses {existing.mode} identity. "
+        f"invalidate it before recreating this path with {requested} identity."
+    )
+
+
+def _local_identity_if_present(path: Path, local_name: str, store) -> Optional[IdentityDecision]:
+    if store is None:
+        return None
+    try:
+        if not store.inspect_index("local", local_name).index_present:
+            return None
+    except Exception:
+        return None
+    return IdentityDecision(
+        mode="local",
+        owner="local",
+        name=local_name,
+        git_root="",
+        walk_root=str(path),
+    )
+
+
+def _path_has_git_root(folder_path: Path) -> bool:
+    return _find_git_root(folder_path) is not None
 
 
 def resolve_index_identity(
@@ -102,29 +154,34 @@ def resolve_index_identity(
         raise ValueError("identity_mode must be one of: config, local, git")
 
     local_name = _local_repo_name(folder_path)
-    if requested == "config" and store is not None:
-        try:
-            if store.inspect_index("local", local_name).index_present:
-                requested = "local"
-            else:
-                existing_git = _existing_git_identity(folder_path, store)
-                if existing_git is not None:
-                    return existing_git
-        except Exception:
-            logger.debug("existing identity probe failed for %s", folder_path, exc_info=True)
+    configured = _configured_identity_mode(folder_path) if requested == "config" else requested
+    local_existing = _local_identity_if_present(folder_path, local_name, store)
+
+    if requested == "git" and local_existing is not None:
+        raise IdentityModeConflict(_identity_conflict_message(local_existing, "git"))
+
+    should_probe_git_identity = store is not None and (
+        requested == "local" or _path_has_git_root(folder_path)
+    )
+    existing_git = _existing_git_identity(folder_path, store) if should_probe_git_identity else None
+
+    if local_existing is not None and existing_git is not None:
+        raise IdentityModeAmbiguous(
+            "Both local and git identity indexes already match this path. "
+            "Invalidate one of them before indexing or resolving this path."
+        )
 
     if requested == "config":
-        try:
-            from .. import config as _config
-            configured = _config.get("identity_mode", None, repo=str(folder_path))
-            if isinstance(configured, str) and configured in {"local", "git"}:
-                requested = configured
-            elif _config.get("git_root_identity", False, repo=str(folder_path)):
-                requested = "git"
-            else:
-                requested = "local"
-        except Exception:
-            requested = "local"
+        if local_existing is not None:
+            return local_existing
+        if existing_git is not None:
+            return existing_git
+        requested = configured
+    elif requested == "local":
+        if existing_git is not None:
+            raise IdentityModeConflict(_identity_conflict_message(existing_git, "local"))
+        if local_existing is not None:
+            return local_existing
 
     if requested == "git":
         ident = detect_git_root(str(folder_path))

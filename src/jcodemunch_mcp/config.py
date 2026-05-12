@@ -1407,9 +1407,11 @@ def generate_template() -> str:
 
   // "identity_mode": "git",
   //   How index_folder derives the repo identifier for a local path.
-  //   Default is local: `local/<basename>-<hash>`, with no git detection
-  //   or retargeting. Uncomment and set to "git" to opt in to v1.95+
-  //   git identity (`<owner>/<repo>`) and monorepo subdir merging.
+  //   Existing indexes keep their current identity. New indexes default
+  //   to local: `local/<basename>-<hash>`, with no git detection or
+  //   retargeting. Uncomment and set to "git" to opt in to v1.95+ git
+  //   identity (`<owner>/<repo>`) and monorepo subdir merging for new
+  //   indexes.
 
   // "git_root_identity": true,
   //   Deprecated legacy boolean alias for identity_mode. Uncomment and set

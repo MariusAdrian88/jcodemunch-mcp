@@ -34,7 +34,7 @@ from ..security import (
     SKIP_FILES
 )
 from ..storage import IndexStore
-from ..storage.git_root import resolve_index_identity
+from ..storage.git_root import IdentityModeAmbiguous, IdentityModeConflict, resolve_index_identity
 from ..storage.index_store import _file_hash, _file_hash_bytes, _get_git_head, _get_git_branch
 from ..summarizer import summarize_symbols
 from ..reindex_state import WatcherChange
@@ -873,11 +873,14 @@ def index_folder(
     store = IndexStore(base_path=storage_path)
     _pairs_for_identity = parse_path_map()
     _identity_path = Path(remap(str(folder_path), _pairs_for_identity, reverse=True))
-    _identity_decision = resolve_index_identity(
-        str(_identity_path),
-        mode=identity_mode,
-        store=store,
-    )
+    try:
+        _identity_decision = resolve_index_identity(
+            str(_identity_path),
+            mode=identity_mode,
+            store=store,
+        )
+    except (IdentityModeAmbiguous, IdentityModeConflict) as exc:
+        return {"success": False, "error": str(exc)}
     owner = _identity_decision.owner
     repo_name = _identity_decision.name
     _git_root = _identity_decision.git_root

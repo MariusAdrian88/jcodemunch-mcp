@@ -15,10 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_repo_id(folder_path: Path, store: Optional[IndexStore] = None) -> str:
-    """Compute the deterministic repo ID for a directory path.
-
-    Same formula as _local_repo_id (watcher.py) and _local_repo_name (index_folder.py).
-    """
+    """Compute the repo ID that index_folder would use for a directory path."""
     decision = resolve_index_identity(str(folder_path), mode="config", store=store)
     return f"{decision.owner}/{decision.name}"
 
