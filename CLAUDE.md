@@ -1,11 +1,11 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.108.0 (Explicit-paths indexing + workspace-aware project intel — `index_folder(paths=[...])` skips the tree walk and indexes only the listed files; new `list_workspaces` tool enumerates pnpm/yarn/npm/turborepo/lerna/rush/Go/Cargo workspace members; `get_project_intel(scope_path=)` restricts discovery to a workspace member)
+- **Version:** 1.108.2 (Bound git-blame walk + honour git_root_identity=false — fixes the 25-30s index_folder timeouts reported on #294; the retarget block in tools/index_folder.py now checks the config before calling detect_git_root; GitBlameProvider walks at most 20k commits / 2 years with a 10s subprocess cap; new `git_blame_enabled` config (default true) skips the probe entirely on legacy histories)
 - **INDEX_VERSION:** 16
-- **Tests:** 4336 passed, 7 skipped (1.108.0)
+- **Tests:** 4344 passed, 7 skipped (1.108.2)
 - **Python:** >=3.10
-- **Tool count:** 81 (was 80; +list_workspaces)
+- **Tool count:** 81 (1.108.0 +list_workspaces)
 
 ## Key Files
 ```
