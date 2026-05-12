@@ -983,7 +983,7 @@ class TestAutoWatchTakeover:
     """Tests for opportunistic standby takeover via _auto_watch_if_needed."""
 
     @pytest.mark.asyncio
-    async def test_auto_watch_pokes_standby_takeover_before_indexing(self, tmp_path, monkeypatch):
+    async def test_auto_watch_indexes_after_standby_takeover_before_tool_runs(self, tmp_path, monkeypatch):
         from jcodemunch_mcp import server
 
         folder = tmp_path / "repo"
@@ -998,7 +998,7 @@ class TestAutoWatchTakeover:
                 calls.append(("maybe_takeover", folder_arg))
                 return {"status": "started", "folder": folder_arg}
 
-            async def ensure_indexed(self, folder_arg):
+            async def ensure_indexed(self, folder_arg, **kwargs):
                 calls.append(("ensure_indexed", folder_arg))
 
             async def add_folder(self, folder_arg):
@@ -1009,7 +1009,11 @@ class TestAutoWatchTakeover:
 
         await server._auto_watch_if_needed("search_symbols", {"path": str(folder)}, None)
 
-        assert calls == [("maybe_takeover", str(folder.resolve()))]
+        resolved = str(folder.resolve())
+        assert calls == [
+            ("maybe_takeover", resolved),
+            ("ensure_indexed", resolved),
+        ]
 
     @pytest.mark.asyncio
     async def test_auto_watch_falls_through_when_takeover_fails(self, tmp_path, monkeypatch):

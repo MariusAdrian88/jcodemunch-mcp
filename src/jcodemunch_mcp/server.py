@@ -3541,6 +3541,7 @@ async def _auto_watch_if_needed(name: str, arguments: dict, storage_path: Option
     if maybe_takeover is not None:
         result = await maybe_takeover(folder)
         if result.get("status") in {"started", "already_watched"}:
+            await _watcher_manager.ensure_indexed(folder)
             return
 
     # Race-safe reindex, then start watching

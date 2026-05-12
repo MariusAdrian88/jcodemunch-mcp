@@ -707,6 +707,63 @@ class TestWatcherManagerStandby:
         assert attempts == 1
 
     @pytest.mark.asyncio
+    async def test_run_uses_configured_standby_retry_interval(self, tmp_path, monkeypatch):
+        from jcodemunch_mcp import watcher
+
+        folder = _make_folder(tmp_path)
+        folder_s = str(folder.resolve())
+        manager = watcher.WatcherManager(storage_path=str(tmp_path / "storage"), quiet=True)
+        stop_evt = asyncio.Event()
+        manager._stop_event = stop_evt
+        manager._standby.add(folder_s)
+        manager._takeover_retry_seconds = 9.0
+        sleeps = []
+
+        async def fake_maybe_takeover(folder):
+            stop_evt.set()
+            return {"status": "lock_failed", "folder": folder, "standby": True}
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(manager, "maybe_takeover", fake_maybe_takeover)
+        monkeypatch.setattr(watcher.asyncio, "sleep", fake_sleep)
+
+        await manager.run()
+
+        assert sleeps == [9.0]
+
+    @pytest.mark.asyncio
+    async def test_stop_releases_active_locks(self, tmp_path, monkeypatch):
+        from jcodemunch_mcp import watcher
+
+        folder = _make_folder(tmp_path)
+        folder_s = str(folder.resolve())
+        storage = tmp_path / "storage"
+        manager = watcher.WatcherManager(storage_path=str(storage), quiet=True)
+        released = []
+
+        monkeypatch.setattr(watcher, "_acquire_lock", lambda fp, sp: True)
+
+        def fake_release_lock(fp, sp):
+            released.append((fp, sp))
+
+        async def fake_watch_single(**kwargs):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(watcher, "_release_lock", fake_release_lock)
+        monkeypatch.setattr(watcher, "_watch_single", fake_watch_single)
+
+        result = await manager.add_folder(folder_s)
+        assert result["status"] == "started"
+
+        manager.stop()
+
+        assert released == [(folder_s, str(storage))]
+        assert folder_s not in manager._locked
+        assert folder_s not in manager._watched
+
+    @pytest.mark.asyncio
     async def test_remove_folder_clears_standby_task(self, tmp_path, monkeypatch):
         """remove_folder must cancel the standby signal loop even when folder was never locked."""
         from jcodemunch_mcp import watcher

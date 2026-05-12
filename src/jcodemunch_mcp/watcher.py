@@ -650,7 +650,7 @@ class WatcherManager:
                     # Retry standby folders on fallback interval
                     for folder in list(self._standby):
                         await self.maybe_takeover(folder)
-                    sleep_seconds = 5.0 if not self._standby else min(5.0, self._takeover_retry_seconds)
+                    sleep_seconds = self._takeover_retry_seconds if self._standby else 5.0
                     await asyncio.sleep(sleep_seconds)
                 # Inner loop exited normally — reset restart counter
                 _restart_count = 0
@@ -680,6 +680,13 @@ class WatcherManager:
         """Signal the manager loop to stop."""
         if self._stop_event:
             self._stop_event.set()
+        for folder, task in list(self._active.items()):
+            task.cancel()
+            self._active.pop(folder, None)
+            self._watched.discard(folder)
+            if folder in self._locked:
+                self._locked.discard(folder)
+                _release_lock(folder, self._storage_path)
         # Clear all standby state
         for folder in list(self._standby):
             self._clear_standby(folder)
