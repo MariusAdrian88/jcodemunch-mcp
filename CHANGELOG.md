@@ -2,6 +2,18 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.108.1] — 2026-05-12 — Surface `git_root_identity` in the config template
+
+`git_root_identity` was in `DEFAULTS`, the type-validation table, and had
+an env-var alias (`JCODEMUNCH_GIT_ROOT_IDENTITY`), but was missing from
+the self-documenting JSONC template — so operators had no way to discover
+it without grepping source. Reported by @MariusAdrian88 (#291 comment).
+
+The template now describes the knob, both states (true coalesces
+`index ./packages` + `index ./scripts` into one repo index per clone;
+false reverts to pre-v1.96 `local/<folder>-<hash>` per-path identity),
+and when to flip it. No behavior change — pure documentation.
+
 ## [1.108.0] — 2026-05-12 — Explicit-paths indexing + workspace-aware project intel
 
 Two additive features, both shipped behind new optional parameters; every

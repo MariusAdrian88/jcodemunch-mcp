@@ -1604,6 +1604,18 @@ def generate_template() -> str:
   // "log_file": null,
   //   Path to log file. null = write to stderr.
 
+  // === Identity & Indexing Behavior ===
+  // "git_root_identity": true,
+  //   When the indexed path lives inside a git working tree, anchor
+  //   `index_folder` at the git root. Indexing a subdir then walks the
+  //   subdir only, but file paths are stored git-root-relative — so
+  //   `index ./packages` and `index ./scripts` coalesce into one repo
+  //   index per clone. Useful for monorepos and worktrees.
+  //   Set false to revert to pre-v1.96 behavior: `local/<folder>-<hash>`
+  //   identity derived from the resolved path, with no retargeting.
+  //   Choose `false` when you deliberately want a subdir to be its own
+  //   independent index, separate from any enclosing git repo.
+
   // === Privacy & Telemetry ===
   // "redact_source_root": false,
   //   Replace absolute source_root paths with display_name in responses.
