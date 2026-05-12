@@ -939,11 +939,12 @@ async def sync_folders(
 # worktree helpers
 # ---------------------------------------------------------------------------
 
-def _local_repo_id(folder_path: str) -> str:
+def _local_repo_id(folder_path: str, store: Optional[IndexStore] = None) -> str:
     """Compute the repo identifier that index_folder would use for a local path."""
-    p = Path(folder_path).resolve()
-    digest = hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:8]
-    return f"local/{p.name}-{digest}"
+    from .storage.git_root import resolve_index_identity
+
+    decision = resolve_index_identity(folder_path, mode="config", store=store)
+    return f"{decision.owner}/{decision.name}"
 
 
 def parse_git_worktrees(repo_path: str) -> set[str]:

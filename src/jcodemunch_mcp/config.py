@@ -1405,6 +1405,16 @@ def generate_template() -> str:
   //   Enable context providers for enhanced AI summarization.
   //   Set false to disable (faster indexing, less context).
 
+  // "identity_mode": "git",
+  //   How index_folder derives the repo identifier for a local path.
+  //   Default is local: `local/<basename>-<hash>`, with no git detection
+  //   or retargeting. Uncomment and set to "git" to opt in to v1.95+
+  //   git identity (`<owner>/<repo>`) and monorepo subdir merging.
+
+  // "git_root_identity": true,
+  //   Deprecated legacy boolean alias for identity_mode. Uncomment and set
+  //   true to opt in to git identity when identity_mode is not set.
+
   // === Meta Response Control ===
   // Allowlist of _meta fields to include in responses.
   // [] (default) = no _meta at all (maximum token savings).

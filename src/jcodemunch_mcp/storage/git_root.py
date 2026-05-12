@@ -12,6 +12,7 @@ one `elastic/kibana` index lands in v1.96.
 """
 
 import logging
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -31,6 +32,119 @@ class GitRootIdentity(NamedTuple):
     git_root: str
     owner: str
     name: str
+
+
+class IdentityDecision(NamedTuple):
+    """Resolved local-folder index identity."""
+
+    mode: str
+    owner: str
+    name: str
+    git_root: str
+    walk_root: str
+
+
+def _local_repo_name(folder_path: Path) -> str:
+    digest = hashlib.sha1(str(folder_path).encode("utf-8")).hexdigest()[:8]
+    return f"{folder_path.name}-{digest}"
+
+
+def _contains_path(root: str, path: Path) -> bool:
+    if not root:
+        return False
+    try:
+        root_path = Path(root).expanduser().resolve()
+        return path == root_path or path.is_relative_to(root_path)
+    except Exception:
+        return False
+
+
+def _existing_git_identity(path: Path, store) -> Optional[IdentityDecision]:
+    if store is None:
+        return None
+    try:
+        entries = store.list_repos()
+    except Exception:
+        return None
+    for entry in entries:
+        repo_id = entry.get("repo", "")
+        if "/" not in repo_id:
+            continue
+        owner, name = repo_id.split("/", 1)
+        try:
+            index = store.load_index(owner, name)
+        except Exception:
+            index = None
+        git_root = getattr(index, "git_root", "") if index is not None else ""
+        if _contains_path(git_root, path):
+            return IdentityDecision(
+                mode="git",
+                owner=owner,
+                name=name,
+                git_root=str(Path(git_root).resolve()),
+                walk_root=str(Path(git_root).resolve()),
+            )
+    return None
+
+
+def resolve_index_identity(
+    path: str,
+    mode: str = "config",
+    store=None,
+) -> IdentityDecision:
+    """Resolve how a local path should be keyed in the index store."""
+    folder_path = Path(path).expanduser().resolve()
+    if folder_path.is_file():
+        folder_path = folder_path.parent
+
+    requested = (mode or "config").lower()
+    if requested not in {"config", "local", "git"}:
+        raise ValueError("identity_mode must be one of: config, local, git")
+
+    local_name = _local_repo_name(folder_path)
+    if requested == "config" and store is not None:
+        try:
+            if store.inspect_index("local", local_name).index_present:
+                requested = "local"
+            else:
+                existing_git = _existing_git_identity(folder_path, store)
+                if existing_git is not None:
+                    return existing_git
+        except Exception:
+            logger.debug("existing identity probe failed for %s", folder_path, exc_info=True)
+
+    if requested == "config":
+        try:
+            from .. import config as _config
+            configured = _config.get("identity_mode", None, repo=str(folder_path))
+            if isinstance(configured, str) and configured in {"local", "git"}:
+                requested = configured
+            elif _config.get("git_root_identity", False, repo=str(folder_path)):
+                requested = "git"
+            else:
+                requested = "local"
+        except Exception:
+            requested = "local"
+
+    if requested == "git":
+        ident = detect_git_root(str(folder_path))
+        if ident is not None:
+            git_root = str(Path(ident.git_root).resolve())
+            return IdentityDecision(
+                mode="git",
+                owner=ident.owner,
+                name=ident.name,
+                git_root=git_root,
+                walk_root=git_root,
+            )
+
+    return IdentityDecision(
+        mode="local",
+        owner="local",
+        name=local_name,
+        git_root="",
+        walk_root=str(folder_path),
+    )
 
 
 # git@github.com:owner/repo.git   |   https://github.com/owner/repo(.git)
