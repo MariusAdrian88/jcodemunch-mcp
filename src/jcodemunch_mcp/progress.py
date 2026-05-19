@@ -95,10 +95,10 @@ class ProgressReporter:
             progress = min(progress, 1.0)
             self._last_sent = progress
             message = self._format(progress, detail)
-        try:
-            self._notify(progress, 1.0, message)
-        except Exception:
-            logger.debug("progress notification failed", exc_info=True)
+            try:
+                self._notify(progress, 1.0, message)
+            except Exception:
+                logger.debug("progress notification failed", exc_info=True)
 
     def _format(self, progress: float, detail: str) -> str:
         filled = int(progress * self._bar_width)
