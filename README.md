@@ -1,3 +1,14 @@
+> [!WARNING]
+> **PyPI install temporarily unavailable.** `pip install jcodemunch-mcp` and `uvx jcodemunch-mcp` (and the one-click installs below, which use `uvx`) return "no versions found" while PyPI Admins review a false-positive quarantine flag triggered after the v1.108.20 release. **Install from the GitHub release instead, same wheel:**
+>
+> ```
+> pip install https://github.com/jgravelle/jcodemunch-mcp/releases/download/v1.108.20/jcodemunch_mcp-1.108.20-py3-none-any.whl
+> ```
+>
+> `uvx` equivalent: `uvx --from https://github.com/jgravelle/jcodemunch-mcp/releases/download/v1.108.20/jcodemunch_mcp-1.108.20-py3-none-any.whl jcodemunch-mcp`
+>
+> Sibling packages (`jdocmunch-mcp`, `jdatamunch-mcp`) are unaffected and install normally. Status, timeline, and live updates: [issue #308](https://github.com/jgravelle/jcodemunch-mcp/issues/308). Expected resolution: late the week of May 26, 2026.
+
 #### One-click installs:
 
 [![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_jCodeMunch-007ACC?style=for-the-badge&logo=visualstudiocode&logoColor=white)](vscode:mcp/install?%7B%22name%22%3A%20%22jcodemunch%22%2C%20%22command%22%3A%20%22uvx%22%2C%20%22args%22%3A%20%5B%22jcodemunch-mcp%22%5D%7D)
