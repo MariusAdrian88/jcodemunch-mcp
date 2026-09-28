@@ -2,6 +2,64 @@
 
 ## [Unreleased]
 
+### Fixed - a C++ header of namespaced declarations is read as C++ (LEDGER L-52)
+
+A `.h` is parsed with both grammars and the better parse wins. The C
+grammar reads `namespace n { class A { void f(); }; }` without a single
+error: `namespace n` becomes a function returning a type named `namespace`,
+and everything inside it a statement block. With both parses clean, the
+tie went to the parse with MORE symbols, and the misparse had more. So a
+declaration-only header in a namespace (6 of leveldb's 56 headers)
+published `n#function` and bare `f#function` rows instead of its classes
+and qualified functions. Found in L-46's review.
+
+A C++ parse that holds a declaration no C source can spell (a
+namespace, class, template, access specifier, `using` or alias), outside
+an ERROR, now wins. That is read from the tree, not from the lexical
+markers the tie-break already had, which match `class ` in a comment. It
+runs ahead of the error comparison, not only on a tie: a Qt `signals:`
+section costs the C++ parse one ERROR and C none, and the first draft
+still chose C there (review). `extern "C" {` is not on the list, because
+the C++ grammar reads a C header's guard that way; counting it moved four
+redis headers (hiredis's `alloc.h`, `async.h`, `read.h` and linenoise's
+`linenoise.h`) to C++ (review).
+The test pins that a namespaced class, a class, access specifiers, a
+namespaced struct, a template, namespace prototypes, a Qt `signals:`
+class and an include-guarded header publish what the same text publishes
+as `.cpp`, and that a C header (a struct, `class` in a comment, a typedef
+with an inline function, hiredis's `extern "C"` guard shape) publishes what
+it publishes as `.c`.
+
+The cost of running it first: a C header that carries a C++ block inside
+`#ifdef __cplusplus` (a `class Wrapper;` forward declaration) is read as
+C++ even where the C++ parse has more errors, so a C `typedef struct buf
+{...} buf;` in it publishes C++'s rows (`buf#type~1`/`~2`, `buf.data`)
+where it published C's (`buf#type`, `buf.buf#type`). Names move, none is
+lost, and no header in lua or redis has that shape (review).
+
+Not fixed (LEDGER L-55), with no real header of either shape found in lua
+or redis:
+- a C header that names a type `using` and then declares with it
+  (`typedef int using; using f(int);`) is read as C++ and loses `f`,
+  because the C++ grammar recovers with a MISSING node that the error
+  count does not see;
+- a K&R definition (`int old(a, b) int a; int b; { ... }`) in a C header
+  that also holds a C++ block is read as C++ and loses `old`, which the
+  C++ grammar drops without an ERROR.
+
+Measured, `main` against this branch:
+- lua 0b29f40 and redis 4cb007b (340 C headers, 516 `.c` files): no id
+  changes;
+- fmt 5da4e9a: no change;
+- leveldb 7ee830d `.h`: 6 headers change, `ids 1163 -> 1155`. The 13
+  removed ids are the misparse: six `leveldb#function`, one each of
+  `leveldb.log#function` and `leveldb.crc32c#function`, and four bare
+  functions (`NewDBIterator`, `NewMemEnv`, `NewMergingIterator`, `Hash`)
+  plus `Extend`, which become `leveldb.NewDBIterator`, `leveldb.NewMemEnv`,
+  `leveldb.NewMergingIterator`, `leveldb.Hash` and `leveldb.crc32c.Extend`.
+  `crc32c`'s `Mask`, `Unmask` and `Value` and `log_format.h`'s
+  `RecordType` lose the bogus function as their parent.
+
 ### Fixed - a C++ class defined with a qualified name is its owner's member (LEDGER L-46)
 
 The pimpl idiom declares a nested class and defines it outside its owner:
