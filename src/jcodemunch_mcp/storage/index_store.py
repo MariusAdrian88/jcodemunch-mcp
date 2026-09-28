@@ -541,6 +541,12 @@ INDEX_VERSION = 17
 #   ⚠⚠ **And L-45: a C-family class behind an export macro is a class.**
 #   MOVES: `Status#function` for `class LEVELDB_EXPORT Status {}` becomes
 #   `Status#class`, and its members gain their owner.
+#
+#   ⚠⚠ **And L-47: a C-family enum behind an export macro is an enum.**
+#   MOVES: `enum class API E { A };` gains `E#type` where it published
+#   nothing; in a class body `S.E#field` becomes `S.E#type`; C's
+#   `E#function` for `enum API E { A };` becomes `E#type`, and C's
+#   `cs#function` for the array `enum Color cs[2] { RED, GREEN };` goes.
 PARSER_GENERATION = 8
 
 

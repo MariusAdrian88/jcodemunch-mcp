@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Fixed - a C-family enum declared behind an export macro is an enum (LEDGER L-47)
+
+`enum class API E { A, B };` published nothing. The grammar reads
+`enum class API` as an elaborated type, `E` as a variable and the
+enumerator list as a brace initializer. In a class body the same head gave
+`S.E#field`, and the C grammar read `enum API E { A, B };` as `E#function`.
+L-45 unmasked class, struct and union heads only. Found in L-45's review.
+
+The same blank-and-re-parse now covers an enum head. The C shape is L-45's
+function shape with an `enum` head, so it joins that rule. The C++ shape is
+a declaration, and one spelling of it is real code: `enum Color c { RED };`
+is a brace-initialised variable and gives the same tree as a one-enumerator
+enum behind a macro. So a scoped head (`enum class`, `enum struct`) is
+always taken, because that elaborated form is legal only in an opaque
+declaration, which has no list. A plain `enum` is taken only when its list
+holds two or more entries, which no enum-typed variable accepts. Entries
+are counted without comments: the first draft counted `/* default */` as an
+entry and turned the real `enum Color c { RED /* default */ };` into a type
+(review). The two-entry rule holds for a scalar only, so the declarator
+must be a plain name: `enum Color cs[2] { RED, GREEN };` is a real array,
+and a draft that stopped reading the declarator blanked `Color` and lost
+the function after it (review, round 2). A qualified name is accepted,
+because a qualified underlying type (`: std::uint8_t`) takes the name's
+slot. In a class body that base parses as a bit-field whose width is
+`std::uint8_t{ A }`, and the list is read there.
+The test pins that a scoped, `enum struct`, one-entry, empty, commented,
+based (`int`, `std::uint8_t`, `ns::T`), two-macro, namespaced, in-class and
+plain two-entry head publishes exactly what the same text without the
+macro publishes, in `.cpp`, `.h` and Arduino; that the C form is an enum;
+and that a brace-initialised variable (with and without a comment), a
+commented enum field, a bit-field with a cast width and a brace-initialised
+enum array (file scope, class body, two-dimensional, Arduino) publish
+exactly what `main` publishes.
+
+Not fixed, each as on `main`:
+- a plain one-enumerator enum behind a macro in C++ (LEDGER L-49);
+- two or more macro enums in a row in C, which the C grammar reads as one
+  `ERROR` (LEDGER L-50);
+- an enum or class behind a macro inside a function body, since the scan
+  does not enter function bodies (LEDGER L-51).
+
+Measured on the pinned corpora, `main` against this branch: no id changes
+(`fmt (h)` `ids 6365 -> 6365`, `leveldb (h)` `ids 1163 -> 1163`, and both
+`.cc` sets unchanged). Neither corpus writes an enum behind a macro, so
+this shows there is no collateral movement. It is not evidence of the fix.
+Ids move only where the shape occurs:
+- a C++ enum behind a macro gains `E#type` where it published nothing;
+- in a class body, `S.E#field` becomes `S.E#type`;
+- C's `E#function` becomes `E#type`;
+- in a `.c` or `.h` file, a brace-initialised enum array
+  (`enum Color cs[2] { RED, GREEN };`) loses the `cs#function` the misparse
+  gave it and publishes nothing, which is what a `.cpp` file publishes for
+  the same text (the function shape now admits an `enum` head, and blanking
+  `Color` leaves a file-scope array, which is not indexed).
+
 ### Fixed - a C++ class declared behind an export macro is a class (LEDGER L-45)
 
 `class LEVELDB_EXPORT Status { bool ok() const; };` is how most exported
@@ -59,8 +114,8 @@ one `testing.testing.*`: error recovery in that 12,399-line header leaves a
 time, median of 5, `main` against this branch in one run:
 `gmock-gtest-all.cc` 0.344 s to 0.368 s, `gtest.h` 1.009 s to 1.093 s,
 `db_impl.cc` 0.037 s to 0.038 s.
-Not fixed here, as on `main` (LEDGER L-47): `enum class API E { A, B };`
-publishes nothing where `enum class E` publishes `E#type`.
+An enum behind a macro was not fixed here (LEDGER L-47); it is fixed in
+the L-47 entry above.
 `PARSER_GENERATION` 8, still unreleased, re-parses unchanged files.
 
 ### Fixed - a C++ out-of-class member definition is a member of its class (LEDGER L-07)
