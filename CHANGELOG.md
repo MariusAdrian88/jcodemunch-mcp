@@ -2,6 +2,69 @@
 
 ## [Unreleased]
 
+### Fixed - a C++ class defined with a qualified name is its owner's member (LEDGER L-46)
+
+The pimpl idiom declares a nested class and defines it outside its owner:
+`class Widget { class Impl; };` then `class Widget::Impl { void go(); };`.
+The class was indexed under its last segment, `Impl#class`, with members
+`Impl.go`. So the out-of-line body `void Widget::Impl::go() {}`, named
+`Widget.Impl.go` since L-07, found no owner and shared no name with its own
+declaration. A deeper qualifier was worse: `struct a::W::I` was named
+`W::I`, with the `::` in the name. Found in L-07's review.
+
+A class, struct, union or enum defined with a qualified name now takes that
+name. Its scope joins the enclosing namespaces the way L-07's out-of-line
+bodies do, and a class of that name in the file is its parent. Its members
+follow, because the member walk reads the qualified name off the class. A
+specialisation `A::B<int>` is named `B`, as the same specialisation
+written inside `A` is; `main` gave the out-of-line one `B<int>`. So two
+specialisations of one template in a file, `template <> struct
+std::hash<A> {}` and `std::hash<B>`, were `hash<A>#type` and `hash<B>#type`
+and are now `std.hash#type~1` and `~2` in source order, as the same two
+written inside `namespace std { }` already were. How a specialisation is
+named at all is LEDGER L-54. A leading `::` resolves from the file scope:
+`class ::A::B {}` is `A.B` (it was `A::B`), and `class ::Top` is unchanged.
+
+The first draft broke L-07. L-07 reads a scope that a file-scope symbol is
+qualified under as a NAMESPACE, and leveldb's `db_impl.cc` defines
+`struct DBImpl::Writer` before its `DBImpl::` bodies. The struct became
+such a symbol, so every body after it turned from a method into a function
+(the draft's corpus diff). The qualifier of a type defined with a
+qualified name is no evidence now, since it may name a class. The
+namespaces ENCLOSING that definition still are: the second draft dropped
+them too, and `namespace n { struct W::I {}; } void n::f() {}` turned
+`main`'s `n.f#function` into a method (review).
+The test pins that each out-of-line form (class, struct, union, enum,
+two-level, namespace-qualified, inside a namespace, `final` with a base,
+specialisation, two specialisations, a leading `::`, export macro, nested
+in the definition) publishes exactly
+what the same class written inline in its owner publishes, in `.cpp`, `.h`
+and Arduino. It also pins that the pimpl bodies are owned by the nested
+class, that an owner in another file still qualifies the class, that
+`DBImpl::Recover` stays a method after `struct DBImpl::Writer`, and that
+`n::f` stays a function after `namespace n { struct W::I {}; }`.
+
+Not fixed, each as on `main`:
+- a class qualified through an inline namespace the source leaves out
+  (`class a::W::I` for `a::v1::W`) is not given the inline namespace, as
+  L-07's bodies are not (LEDGER L-53);
+- a `.h` whose namespaced class holds only method prototypes,
+  `namespace n { class A { void f(); }; }`, is read as C and publishes
+  `n#function` (LEDGER L-52).
+
+Measured on the pinned corpora, `main` against this branch: every id count
+is unchanged, and the moves are re-qualifications.
+- leveldb `.cc`: 5 files, `+class: 3`, `+field: 56`, `+method: 37`,
+  `+type: 8` against the same removals. `CompactionState` in `db_impl.cc`
+  becomes `DBImpl.CompactionState`, and `DBImpl::Writer` and its members
+  follow.
+- leveldb `.h`: `skiplist.h`, `+method: 5`, `+field: 2`, `+type: 1` against
+  the same removals. `leveldb.Node` becomes `leveldb.SkipList.Node`.
+- fmt `.cc`: `format-test.cc`, `formatter<explicitly_convertible_to_std_string_view>#type`
+  becomes `fmt.formatter#type`. Its `format` then shares a name with another
+  `fmt.formatter.format`, and the two are numbered `~1`/`~2`.
+- fmt `.h`: no change.
+
 ### Fixed - a C-family enum declared behind an export macro is an enum (LEDGER L-47)
 
 `enum class API E { A, B };` published nothing. The grammar reads
