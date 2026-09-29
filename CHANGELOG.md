@@ -2,6 +2,70 @@
 
 ## [Unreleased]
 
+### Fixed - a dynamic import is an import edge when its target is a literal, and a named boundary when not (#876)
+
+Reported by @Torolosko (split from #718). The static model stopped at a
+dynamic dispatch and said nothing. `_passthrough("run_g_gates", rest)`
+fed `__import__(module_name)`, and an impact query on `run_g_gates.main`
+came back empty although a real consumer reaches it. An empty result
+there read as "nothing depends on this".
+
+Fixed at the import authority (`parser/imports.py`), so every graph
+consumer inherits it:
+- A literal target (`__import__("x")`, `importlib.import_module("x")`) is
+  an import edge.
+- A literal passed one step into a parameter that feeds one, by position
+  or keyword (a method's `self`/`cls` skipped), is an edge. That covers the
+  reported case; it is the issue's bounded "one-step finite literal
+  propagation", not symbolic execution. It holds only while the parameter
+  is never rebound in the function (`name = "plugins." + name` would
+  otherwise yield a wrong edge to `foo`), and only when every use of the
+  function in the file is a direct call: one passed to `map`, registered
+  or called on another object can receive anything, and is a site.
+- A subscript into a module-level literal table (`GRAMMARS[name][1]`) is
+  the table's values along that path, never its keys. The table must hold
+  only constants and tuples below its top level (a list or dict inside it
+  can be changed through any value read out of it), and nothing may change
+  the table itself: `T[k] = cfg`, `T.update(...)`, an alias or handing it
+  to a function makes it a site; `k in T`, `sorted(T)` and `T.get(k)` are
+  reads.
+- A loop variable over a literal sequence (`for m in ("a", "b")`) is each
+  of its strings, when every binding of that name is such a loop; a
+  comprehension's variable is local to it and counts unless the
+  comprehension binds the name again.
+- Anything else is a recorded site with a scope: `package` (built from
+  the package's own name, the #569 self-enumeration shape, including the
+  relative spelling `import_module(f".{m.name}", __package__)`), `prefix:<m>`
+  (a literal module prefix like `f"adapters.{name}"`, or `X.__name__` of
+  an imported module), or `opaque` (a name computed from data). A public
+  loader function is also `opaque`, since another file can call it with
+  anything.
+
+`get_blast_radius.blast_verdict` refuses an empty walk of a Python file
+with `dynamic_import_boundary`, naming the sites (capped at 10, with
+`files_total`), only when a site's scope reaches that file. An opaque
+site is disclosed beside the empty result as `dynamic_imports_unfollowed`,
+in the response body so the default `meta_fields: []` does not strip it,
+and does not flip it (jjg's ruling, 2026-09-29): most repositories have a
+registry- or config-driven loader, and a refusal that fires on every empty
+result teaches people to ignore it. The review measured the first draft
+refusing every empty Python blast radius on this repository. Measured over
+its 1,101 tracked Python files (`dynamic-sites.txt`), 9 files hold an unresolved
+dynamic import. An ordinary module such as `tools/find_dead_code.py` now
+gets no refusal and 4 disclosed opaque sites. An `encoding/schemas/`
+module, which those loaders really do import, is refused by 3 scoped
+sites. A file that does not parse yields no edges and no site.
+
+`PARSER_GENERATION` 8 -> 9: the new edges change `files.imports` on
+unchanged content, so an existing index re-parses once on upgrade to gain
+them. No symbol id moves. Subprocess launches, config-driven dispatch and a
+function reached through a string lookup (`globals()["_load"](cfg)`) are
+not visible to the AST and are not covered. A public module-level table is
+trusted though another file could add to it, unlike a public loader
+function, which is a site: LEDGER L-71. `find_dead_code` and
+`check_delete_safe` read the new edges but not the boundary: LEDGER L-70.
+The marker names no package, so no cross-repo package match reads it.
+
 ### Fixed - `config --check` and `init` say when the installed agent policy is not the one this version writes (#871)
 
 A correction to the agent policy that `init` installs never reached an
