@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed - `name_not_searchable` names the re-index and the loaders that could move it (LEDGER L-81)
+
+`check_delete_safe` runs three gates over an absence verdict: the name gate
+(#714), then the dynamic-import gate (L-70), then the corpus gate (#566). The
+later two fired only on the plain absence verdicts, so a symbol the name gate
+had already moved to `name_not_searchable` skipped both. On a stale index its
+`stop_rule.would_change_verdict` named reading the call sites and left out
+"re-index this repo", which the corpus gate's own comment says is the gap that
+could change the answer, and the blocker list dropped the corpus blocker.
+
+Both gates now run on `name_not_searchable` too. The verdict keeps its name,
+because the name gate is the narrower cause, the same rule the corpus gate
+already applies to `dynamic_import_boundary`, and it gains the other gates'
+blockers and gaps. Both halves are reachable on a real repo: a C# operator on a
+stale index, and a Python function with a non-ASCII name (`def café()`) in a
+package that loads its modules by computed name. The name predicate is
+ASCII-only, so it refuses `café` though a call site writes it; that is LEDGER
+L-83, and it fails toward a refusal, never a deletion.
+
 ### Fixed - `check_delete_safe` no longer tells an agent to stop checking on an unsearchable name (LEDGER L-80)
 
 `name_not_searchable` (#714) is the verdict for a symbol no call site names:
