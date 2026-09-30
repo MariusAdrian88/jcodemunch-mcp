@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### Fixed - a page of test mentions no longer hides a real caller from `check_delete_safe` (LEDGER L-89)
+
+`check_delete_safe` asked `check_references` for at most 20 files and built
+its verdict from that page alone. Twenty test files that merely mention the
+name, in a comment, pushed the one real caller off the page, and a used
+function graded `test_coverage_only`. This is #559's shape: a count taken
+after the page is cut describes the page. It predates L-84, which added a new
+way to fill the page (a name's compatibility spelling in prose), and the L-84
+review found it.
+
+The preflight now reads every file. It calls the same search the public tool
+uses, without the tool's page cap, which costs at most one full scan, the
+cost a search that finds nothing already pays. Measured on this repository's
+own index (cross-repo on, as by default), the median of five went from 12,826
+to 13,566 ms for `resolve_repo`, a widely referenced symbol, and from 13,476
+to 13,573 ms for `build_stop_rule`.
+
+### Fixed - `check_references` finds a call written in another spelling of the name (LEDGER L-84)
+
+Python normalises identifiers to NFKC, so `def file()` called as `ﬁle()`
+(the fi ligature) is one function called once. `check_references` tested
+whether the identifier's bytes appeared in a line, so it never saw that call,
+and `check_delete_safe`, which reads it for its no-reference evidence, graded
+the used function `safe_to_delete` at confidence 1.0. The name gate could not
+catch it, because `file` is a plain ASCII identifier. The same held for a
+decomposed accent, a fullwidth letter or a mathematical-bold letter on either
+side, and for an import written in another spelling.
+
+`check_references` now compares NFKC-folded text on both sides of a line match
+and an import match, for every language: a found reference only ever blocks a
+delete, and the search already over-matches on purpose (substring,
+case-insensitive). The exclusion of the definition's own lines is NOT folded.
+Review found that folding it removes matches: in Java, `ﬁle()` and `file()`
+are two methods, and a folded exclusion skipped the body of `ﬁle` as `file`'s
+definition, losing the call inside it and grading the used method
+`safe_to_delete` at 1.0 where main blocked. ASCII text skips the
+normalisation, since NFKC changes nothing there. Measured with a scratch script
+on this repository's own index, the median over five runs went from 524 to 534
+ms for a name that appears nowhere and from 247 to 272 ms for `verdict`.
+
 ### Fixed - `name_not_searchable` names the re-index and the loaders that could move it (LEDGER L-81)
 
 `check_delete_safe` runs three gates over an absence verdict: the name gate

@@ -6,10 +6,41 @@ Answers "is this identifier used anywhere?" for quick dead-code detection.
 
 import posixpath
 import time
+import unicodedata
 from typing import Optional
 
 from ..storage import IndexStore
 from ._utils import index_status_to_tool_error, resolve_repo
+
+
+def _fold(text: str) -> str:
+    """The spelling two identifiers are compared in (LEDGER L-84).
+
+    ⚠⚠ Python normalises identifiers to NFKC, so `def file()` called as
+    `\ufb01le()` (the fi ligature) is one function called once, and a byte
+    comparison never saw the call: `check_delete_safe` read that as no
+    reference and graded the used function `safe_to_delete` at 1.0.
+
+    NFKC on both sides of a LINE or IMPORT match, for every language: a
+    found reference only ever blocks a delete, and the search already
+    over-matches on purpose (substring, case-insensitive). Folding can drop
+    a raw hit only where a combining mark follows the identifier and NFKC
+    composes it onto the last letter (`file` + U+0301), which spells a
+    different identifier, so no real reference is lost.
+
+    ⚠⚠ NEVER fold the definition-span EXCLUSION (review, L-84): that step
+    REMOVES matches, and in a language that does not normalise, Java's
+    `\ufb01le()` and `file()` are two methods. Folding it skipped the body of
+    `\ufb01le` as `file`'s own definition and lost the call inside it --
+    `safe_to_delete` at 1.0 where main blocked. The identifier is the
+    declared spelling, so the exclusion needs no folding to find it.
+
+    ASCII is returned as `lower()` without normalising: NFKC is the
+    identity there, and this runs on every line of every file.
+    """
+    if text.isascii():
+        return text.lower()
+    return unicodedata.normalize("NFKC", text).lower()
 
 
 def _check_single(
@@ -23,7 +54,10 @@ def _check_single(
     start: float,
 ) -> dict:
     """Core logic for checking a single identifier against import + content data."""
-    ident_lower = identifier.lower()
+    ident_lower = _fold(identifier)
+    # The exclusion's key: exact spelling, case-insensitive as before (see
+    # `_fold`'s ⚠⚠ -- an exclusion must never widen).
+    ident_exact = identifier.lower()
 
     # ── Import-level check ──────────────────────────────────────────────────
     import_references = []
@@ -31,9 +65,9 @@ def _check_single(
         for src_file, file_imports in index.imports.items():
             matches = []
             for imp in file_imports:
-                named_match = any(n.lower() == ident_lower for n in imp.get("names", []))
+                named_match = any(_fold(n) == ident_lower for n in imp.get("names", []))
                 spec = imp["specifier"]
-                spec_stem = posixpath.splitext(posixpath.basename(spec))[0].lower()
+                spec_stem = _fold(posixpath.splitext(posixpath.basename(spec))[0])
                 stem_match = spec_stem == ident_lower
 
                 if named_match or stem_match:
@@ -77,7 +111,7 @@ def _check_single(
     defining_spans: dict[str, list[tuple[int, int]]] = {}
     unspanned_files: set[str] = set()
     for sym in index.symbols:
-        if sym.get("name", "").lower() != ident_lower:
+        if sym.get("name", "").lower() != ident_exact:
             continue
         file_path = sym.get("file", "")
         if not file_path:
@@ -118,7 +152,7 @@ def _check_single(
 
             file_matches = []
             for line_index, line in enumerate(content.split("\n")):
-                if ident_lower not in line.lower():
+                if ident_lower not in _fold(line):
                     continue
                 line_no = line_index + 1
                 if any(lo <= line_no <= hi for lo, hi in spans):
