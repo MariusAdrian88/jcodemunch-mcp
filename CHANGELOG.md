@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Fixed - a call spelled with a Unicode escape is a call (LEDGER L-86)
+
+Java translates Unicode escapes before it reads a single token, so a call
+written with the escape for `f` followed by `ile()` is a call to `file()`.
+C# accepts the same escape inside an identifier, and an eight-digit form too.
+JavaScript and TypeScript accept a braced form. `check_references` compared
+the raw line, so it never saw that call. `check_delete_safe` reads that search
+for its "no reference" evidence. With no import edge between the files, which
+is the ordinary case in one Java package or one JS file, it graded the called
+function `safe_to_delete` at confidence 1.0.
+
+The reference search now decodes escapes before it compares, in the one place
+LEDGER L-84 already folds spellings. That covers the repeated-`u` form Java
+allows, hex digits in either case, the braced form, and an astral character
+spelled as two escaped surrogates. When `javac` and `node` are on PATH, the
+test compiles and runs the Java and JavaScript fixtures first, so those
+spellings are proven to call the function they are counted against. The C#
+forms rest on the language specification. Decoding cannot drop a call:
+wherever an escape can stand before a call, it is one. It can drop a textual
+mention whose letters sit inside an escape's hex digits, such as a Windows
+path segment. An escape of a different letter still names a different
+identifier and does not match.
+
 ## [1.108.320] - 2026-09-30 - a member the index never saw and a caller the search never found both read as nothing there
 
 A symbol the index never recorded and a caller the reference search never found
