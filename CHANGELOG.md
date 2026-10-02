@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Security
+
+- **A local model path is refused when the installed `sentence-transformers` would run its code.**
+  1.108.326 raised the `semantic` extra's floor to 5.6.0 (GHSA-jhr6-gm9c-rqjv), and a floor is install
+  metadata: `pip install -U jcodemunch-mcp` without the extra named, or a `sentence-transformers`
+  installed directly, keeps the older release, and nothing said so. The embedding call now checks the
+  release it imported. When `embed_model` (or `JCODEMUNCH_EMBED_MODEL`) is a path that exists and the
+  release is older than 5.6.0, is a pre-release of 5.6.0, or has a version that cannot be read, the call
+  refuses before the model is constructed and names the advisory and the upgrade command. Where the
+  reason appears: `embed_repo` reports it under `error_causes`; `search_symbols(semantic=true)` returns
+  it as the error; `search_symbols(fusion=true)` still answers from its other channels and carries it
+  in a new `semantic_channel_error` field, with the verdict's semantic channel reading `unavailable`.
+  That fusion exit used to catch every failure of its similarity channel and answer `off`, the same as
+  a repository that was never embedded; any exception there is named now, not only this refusal, with
+  the message redacted and cut like `error_causes`. Two things follow. A fusion answer whose channel
+  failed is not cached, so the next call tries the channel again (a cached refusal would have been
+  replayed after the upgrade it asks for). And a fusion search that returns nothing while the channel
+  failed still reads `absent`, as it did before: its lexical and identity passes score every candidate,
+  so zero rows is a fact about the corpus. The failed channel is labelled beside that verdict.
+  An embedded repository with no provider configured still reads `off`; nothing was attempted there. A Hub
+  model name is not refused, because the bypass is in the local-directory path. A name that is a path
+  only after `~` or `$VAR` expansion is refused too, although the library would not load it from disk.
+  A fixed release behaves as before (LEDGER L-108). jdocmunch-mcp and jdatamunch-mcp have their own
+  call sites and do not have this check (L-109).
+
 ## [1.108.326] - 2026-10-02 - the semantic extra requires a sentence-transformers that does not run a local model's code
 
 ### Security
