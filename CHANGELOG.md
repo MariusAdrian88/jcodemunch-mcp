@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A repo-key lookup that found nothing was never remembered (#960, reported by @ebataeva).**
+  `config._resolve_repo_key` documented a negative cache and wrote none: a `repo=` value that matched
+  no index listed every index in storage on every call, and the listing opens every `.db`. Discovery
+  asks once per candidate file (`is_secret_file(rel_path, repo=str(root))`), so indexing a
+  subdirectory of a git root paid one full listing per file, and the bill grew with the number of
+  indexes the user has. A source root that DID match was not written back either, which is the
+  second, smaller cost in the report. Both answers are remembered now. A remembered miss is dropped
+  when this process saves or deletes an index through `IndexStore`, and expires after
+  `_REPO_MISS_TTL_SECONDS` (5 s) for a save made by another process, which nothing here is told
+  about; so a walk longer than that lists once per window, not once per file. A listing that raises
+  is not a miss and is not remembered, and neither is one that a save overtook while it was in
+  flight. `IndexStore.delete_index` also drops the keys resolved for the index, which used to
+  outlive it. The hit cache holds at least one whole listing, so a store past 256 indexes no longer
+  evicts the key it just resolved. One shape is still not held: past roughly 256 indexes, many
+  different source-root PATHS asked in turn push each other out (LEDGER L-105). Measured with 17 indexes in storage and 1,000 candidate files under a root that
+  matches none (the run is in the PR body): 1,005 listings and 40.98 s before, 1
+  listing and 4.05 s after.
+
 ## [1.108.324] - 2026-10-02 - one rule says whether a path is a test file
 
 ### Fixed
