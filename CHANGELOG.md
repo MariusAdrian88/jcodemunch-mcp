@@ -2,6 +2,59 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A test directory at the repository root was not a test directory (LEDGER L-101).**
+  `find_dead_code` and `get_dead_code_v2` asked whether `"/tests/"` appears in a path, which needs a
+  slash BEFORE the directory, so `tests/helpers.py`, `test/helpers.py` and `__tests__/shapes.js` at
+  the root were reported dead at confidence 1.0 while `pkg/tests/helpers.py` was skipped. The deletion
+  investigator asks `find_dead_code` whether an importer is dead (L-94), so it called a name such a
+  file imports "imported by nothing live". Six rules answered the question under `src/` and no two
+  agreed: `check_delete_safe` and `find_similar_symbols` saw the root directory and missed `a_test.py`,
+  `a.spec.ts` and `__tests__/`; `get_pr_risk_profile` matched `"/test"` anywhere, which made
+  `src/testimonials.tsx` a test. There is one rule now, `tools/_test_paths.is_test_file`, and every
+  tool imports it: a directory named `tests`, `test`, `__tests__`, `__test__`, `test_*` or `*_tests`
+  at any depth, or a filename `test_*`, `*_test.*`, `conftest.py`, `tests.py`, `*_spec.rb`, or
+  `*.test.*` / `*.spec.*` with a JavaScript or TypeScript extension. Each suffix is tied to the
+  extensions that carry its convention because `check_delete_safe` and `check_edit_safe` read the
+  rule to call a use a TEST use, which downgrades a blocking verdict: `models/pod_spec.py` and
+  `docs/api_spec.yaml` are not tests, and a test holds those two tools to the verdict they give for
+  `models/pod.py`.
+
+  Every tool's answer moves on some path. For each old rule against the new one:
+  - `find_dead_code`, and `get_blast_radius`, `get_untested_symbols`, `find_unused_paths` and
+    `get_parity_map`, which import its predicate: gain the root-level directories, `__test__/`,
+    `*_tests/` and `test_*/` directories, `*_test.<any extension>`, `*_spec.rb` and `tests.py`, and
+    match without regard to case (`Tests/`, `TEST_PLAN.md`); lose `*.spec.*` and `*.test.*` outside
+    JavaScript and TypeScript.
+  - `get_dead_code_v2`: the same gains, plus `__tests__/` at any depth and `*.spec.*` / `*.test.*`,
+    which it never had.
+  - `check_delete_safe`, `check_edit_safe`, `find_similar_symbols` and the reuse audit: gain
+    `__tests__/`, `__test__/`, `*_tests/`, `*_test.*`, `*.spec.*`, `*.test.*`, `*_spec.rb` and `tests.py`; the last
+    two tools also gain `conftest.py`. ⚠⚠ Three of those spellings can name a production file:
+    `experiments/ab_test.py`, `certs/tests.py` and `experiments/ab_tests/`. A use there is a test
+    use to both preflights now, as a use in `test_utils.py` already was. `check_delete_safe` answers
+    `test_coverage_only` where it answered `external_uses_blocking`: not terminal, the file named as
+    a blocker, never `safe_to_delete`. `check_edit_safe` answers `safe_to_edit` where it answered
+    `signature_impact`, so read `test_import_count` before trusting that verdict on a repository
+    that names production files this way. Both verdicts are pinned by tests.
+  - `get_pr_risk_profile`: stops calling `testing/`, `testutil/`, `testdata/`, `pytest_*.py`, a
+    filename with `test_` after its first character (`_test_paths.py`),
+    `test.py`, `test.js`, `tests.js`, `*_spec.<not rb>`, `*.spec.*` and `*.test.*` outside JavaScript
+    and TypeScript (`x.test.d.ts` included), `my_test.config.js` and `.github/workflows/test.yml`
+    tests; gains `conftest.py`, a root-level `__tests__/`, `__test__/` and `*_tests/`.
+  - `get_file_risk` (`has_tests`, which feeds its `test_gap` score): gains `conftest.py`, `tests.py`,
+    `*.spec.*`, `*.test.*` and `*_spec.rb`; loses every name its old pattern matched in the middle
+    of a segment: a directory ending `_test` (`src/ab_test/`), `my_test.config.js`, `foo_testing.py`.
+
+  `tests/test_one_test_file_predicate.py` pins the cases in both directions and fails when a module
+  binds the names the copies used, at any depth, by a def, a class, an assignment,
+  a walrus, a loop or `with` target, an argument, an import alias (unless the name it
+  imports is itself one of those names), a `match` capture or an `except ... as`. A rule under a new name is seen only
+  through the tools that test runs: the two dead-code tools, the investigator, `get_file_risk` and
+  the two preflights. `get_repo_health`'s production-path rule answers a different question and
+  is unchanged (L-104).
+
 ## [1.108.323] - 2026-10-01 - an entry point has no importer, and that does not make it dead
 
 ### Fixed
