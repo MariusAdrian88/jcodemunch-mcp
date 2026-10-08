@@ -473,7 +473,11 @@ def embed_repo(
     if not index:
         return index_status_to_tool_error(store.inspect_index(owner, name))
 
-    from ..storage.embedding_store import EmbeddingStore
+    from ..storage.embedding_store import (
+        STALE_MODEL_CHANGED,
+        EmbeddingStore,
+        stale_reason,
+    )
     db_path = store._sqlite._db_path(owner, name)
     emb_store = EmbeddingStore(db_path)
 
@@ -486,50 +490,49 @@ def embed_repo(
     # still named the first. `EmbeddingMatrix` then infers its dimension from
     # the FIRST row and drops every row that disagrees, so the symbols embedded
     # after the change stopped being searchable — silently, and cumulatively.
-    stored_dim = emb_store.get_dimension()
-    stored_model = emb_store.get_model()
+    #
+    # ⚠ ONE reading of the store decides the rebuild AND what is disclosed
+    # (LEDGER L-121, review rounds 4 and 5): with the model read by one call
+    # and the rule fed by another, a failed second reading skipped the rebuild
+    # while the first still reported `embedding_model_changed`. `for_writer`
+    # reads over the read-write connection this function writes with.
+    stored_meta = emb_store.read_meta(for_writer=True)
+    stored_dim: Optional[int] = None
+    stored_model: Optional[str] = None
+    if stored_meta is None:
+        # Nothing could be read, so nothing is claimed about the model; a
+        # dimension row that can be read still stops a re-stamp over vectors
+        # this call did not write.
+        stored_dim = emb_store.get_dimension()
+    elif stored_meta["has_vectors"]:
+        stored_dim = stored_meta["dimension"]
+        stored_model = stored_meta["model"]
+    else:
+        # An empty store has no stamp to honour. `clear()` removes the rows
+        # with the vectors now; a store emptied before that still carries
+        # them, and seeding `dim` from one skipped the re-stamp below, so new
+        # vectors were written under the old model's name.
+        emb_store.drop_orphan_stamp()
     # ⚠ Unknown is NOT a change. A store written before `embed_model` was
     # persisted has no name, and forcing a re-embed on that would bill every
     # existing user a full rebuild for a model that may well be identical.
     model_changed = bool(stored_model) and bool(model) and stored_model != model
-    if not force and model_changed and emb_store.count() > 0:
-        logger.info(
-            "embed_repo: model changed (%r → %r); forcing re-embed",
-            stored_model, model,
-        )
-        force = True
 
-    # If the task type changed (e.g. Gemini task-awareness toggled), existing
-    # embeddings were built with a different task type and must be regenerated.
-    #
-    # ⚠⚠ Three states, not two (#523). `None` is NEVER RECORDED and `""` is
-    # RECORDED AS NONE: the empty string is what every provider but task-aware
-    # Gemini writes, so testing truthiness would miss a real toggle from `""`,
-    # and comparing `None` with `""` billed a full re-embed for an absent row.
-    # An absent row beside a recorded dimension is unknown, and unknown is not
-    # a change, as for the model above.
-    #
-    # ⚠ Vectors with NO metadata at all (no dimension either) are a different
-    # case and are still rebuilt: nothing says what produced them, and the
-    # first batch below would stamp the store with the CURRENT model over them.
-    # A full re-index left stores in that state before #522.
-    stored_task_type = emb_store.get_task_type()
+    # A changed model, a changed task type (e.g. Gemini task-awareness toggled)
+    # and vectors with no metadata each force a rebuild. The rule and its three
+    # states (#523) are `embedding_store.stale_reason`, which the semantic
+    # top-up in `search_symbols` asks too (LEDGER L-121); do not restate it here.
     rebuild_reason: Optional[str] = None
-    if not force and emb_store.count() > 0:
-        if stored_task_type is None and stored_dim is None:
+    if not force:
+        stale = stale_reason(stored_meta, model, doc_task_type or "")
+        if stale:
             logger.info(
-                "embed_repo: vectors with no embedding metadata; forcing re-embed"
+                "embed_repo: %s (stored model %r, active %r, task type %r); forcing re-embed",
+                stale, stored_model, model, doc_task_type,
             )
-            rebuild_reason = "embedding_metadata_missing"
             force = True
-        elif stored_task_type is not None and stored_task_type != (doc_task_type or ""):
-            logger.info(
-                "embed_repo: task_type changed (%r → %r); forcing re-embed",
-                stored_task_type,
-                doc_task_type,
-            )
-            rebuild_reason = "embedding_task_type_changed"
-            force = True
+            if stale != STALE_MODEL_CHANGED:
+                rebuild_reason = stale
 
     if force:
         emb_store.clear()
